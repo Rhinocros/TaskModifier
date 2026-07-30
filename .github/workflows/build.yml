@@ -55,20 +55,47 @@ jobs:
         run: |
           $target = "${{ matrix.target }}"
           $arch = "${{ matrix.arch_name }}"
-          $exePath = "src-tauri/target/$target/release/TaskModifier.exe"
           $distDir = "dist"
           
           if (-not (Test-Path $distDir)) {
               New-Item -ItemType Directory -Path $distDir
           }
           
-          if (Test-Path $exePath) {
-              Copy-Item $exePath -Destination "$distDir/TaskModifier-windows-$arch.exe"
-              Write-Host "Successfully copied $exePath to $distDir/TaskModifier-windows-$arch.exe"
+          $candidates = @(
+              "src-tauri/target/$target/release/TaskModifier.exe",
+              "src-tauri/target/$target/release/task-modifier.exe",
+              "src-tauri/target/release/TaskModifier.exe",
+              "src-tauri/target/release/task-modifier.exe"
+          )
+          
+          $foundExe = $null
+          foreach ($path in $candidates) {
+              if (Test-Path $path) {
+                  $foundExe = $path
+                  break
+              }
+          }
+          
+          if (-not $foundExe) {
+              $searched = Get-ChildItem -Path "src-tauri/target" -Recurse -Filter "*.exe" | 
+                  Where-Object { $_.FullName -notmatch '\\deps\\' -and $_.FullName -notmatch '\\build\\' } | 
+                  Select-Object -First 1
+              if ($searched) {
+                  $foundExe = $searched.FullName
+              }
+          }
+          
+          if ($foundExe) {
+              Write-Host "Found executable at $foundExe"
+              Copy-Item $foundExe -Destination "$distDir/TaskModifier-windows-$arch.exe"
+              Write-Host "Successfully copied to $distDir/TaskModifier-windows-$arch.exe"
           } else {
-              Write-Error "Could not find built executable at $exePath"
+              Write-Host "Listing contents of src-tauri/target for debugging:"
+              Get-ChildItem -Path "src-tauri/target" -Recurse | Select-Object FullName
+              Write-Error "Could not find built executable for target $target"
               exit 1
           }
+
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
