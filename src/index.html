@@ -20,7 +20,7 @@
         </div>
         <div>
           <h1>计划任务调度器</h1>
-          <p class="subtitle">Scheduled Task Modifier • Native Windows Engine</p>
+          <p class="subtitle">Scheduled Task Engine • Dual Mode Windows Core</p>
         </div>
       </div>
 
@@ -32,8 +32,18 @@
       </div>
     </header>
 
-    <!-- Main Grid -->
-    <main class="app-main">
+    <!-- Navigation Tabs -->
+    <nav class="tab-nav">
+      <button class="tab-btn active" data-tab="tab-system">
+        <span>📋 系统计划任务修改器</span>
+      </button>
+      <button class="tab-btn" data-tab="tab-custom">
+        <span>⚡ 高级自主任务引擎</span>
+      </button>
+    </nav>
+
+    <!-- Tab 1: System Scheduled Tasks Modifier -->
+    <main id="tab-system" class="tab-content active">
       <!-- Left Column: Add Task Card -->
       <section class="card form-card">
         <div class="card-header">
@@ -51,7 +61,7 @@
 
           <div class="form-group">
             <label for="targetDatetime">修改生效时间 (日期与精确时刻)</label>
-            <input type="datetime-local" id="targetDatetime" step="1" required />
+            <input type="datetime-local" id="targetDatetime" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required />
             <div class="quick-preset">
               <button type="button" class="preset-btn reset" onclick="resetToNow()">设为现在</button>
               <button type="button" class="preset-btn" onclick="setPresetOffset(1)">+1 分钟</button>
@@ -109,9 +119,108 @@
         </div>
       </section>
     </main>
+
+    <!-- Tab 2: Advanced Custom Tasks Engine -->
+    <main id="tab-custom" class="tab-content">
+      <!-- Left Column: Add Custom Task Form -->
+      <section class="card form-card">
+        <div class="card-header">
+          <h2><span class="icon">⚙️</span> 创建高级自主任务</h2>
+        </div>
+
+        <form id="addCustomRuleForm" onsubmit="return false;">
+          <div class="form-group">
+            <label for="customTaskName">自主任务名称</label>
+            <input type="text" id="customTaskName" placeholder="例如: 每日定时多提醒与多程序拉起" required />
+          </div>
+
+          <!-- 规则有效启用/禁用时间区间 (可选多个) -->
+          <div class="form-group">
+            <label>规则有效启用时间段 (可选添加多组起点与终点)</label>
+            <div id="enableWindowsContainer" class="multi-input-container">
+              <div class="multi-window-row">
+                <div class="window-inputs-group">
+                  <input type="datetime-local" class="window-start-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后生效启用" placeholder="开启时间" />
+                  <span class="window-separator">⬇ 启用至 ⬇</span>
+                  <input type="datetime-local" class="window-end-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后失效禁用" placeholder="截止时间" />
+                </div>
+                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+              </div>
+            </div>
+            <button type="button" class="add-btn" onclick="addEnableWindowRow()">+ 添加有效时间段</button>
+            <span class="help-text">不填则规则长期保持有效；满足任意一组时间段即自动激活规则</span>
+          </div>
+
+          <!-- 多个不规则执行时间点 -->
+          <div class="form-group">
+            <label>触发时间点 (可添加多个不规则时间)</label>
+            <div id="triggerTimesContainer" class="multi-input-container">
+              <div class="multi-input-row">
+                <input type="datetime-local" class="trigger-time-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required />
+                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+              </div>
+            </div>
+            <button type="button" class="add-btn" onclick="addTriggerTimeRow()">+ 添加执行时间</button>
+          </div>
+
+          <!-- 多个执行程序路径/命令 -->
+          <div class="form-group">
+            <label>触发执行程序/命令行 (可选多个，支持带参数运行)</label>
+            <div id="executablesContainer" class="multi-input-container">
+              <div class="multi-input-row">
+                <input type="text" class="executable-input" placeholder='例如: PotPlayerMini64.exe "D:\视频.dpl" /autoplay /fullscreen' />
+                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+              </div>
+            </div>
+            <button type="button" class="add-btn" onclick="addExecutableRow()">+ 添加执行程序</button>
+            <span class="help-text">完全支持带任意参数运行 (如: D:\App.exe "D:\file.dpl" /autoplay /fullscreen)</span>
+          </div>
+
+          <!-- 多个显示弹窗内容 -->
+          <div class="form-group">
+            <label>触发显示弹窗消息 (可选多个)</label>
+            <div id="popupsContainer" class="multi-input-container">
+              <div class="multi-input-row">
+                <input type="text" class="popup-input" placeholder="例如: 提醒内容：请及时处理相关业务" />
+                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+              </div>
+            </div>
+            <button type="button" class="add-btn" onclick="addPopupRow()">+ 添加显示弹窗</button>
+          </div>
+
+          <!-- 置顶配置 -->
+          <div class="form-group">
+            <label class="checkbox-label">
+              <input type="checkbox" id="customAlwaysOnTop" checked />
+              <span>📌 触发时窗口自动浮现并强制最上层置顶 (Top-Most)</span>
+            </label>
+          </div>
+
+          <button type="submit" id="submitCustomBtn" class="primary-btn">
+            <span>保存自主高级规则</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Right Column: Custom Tasks List -->
+      <section class="right-column">
+        <div class="card list-card">
+          <div class="card-header">
+            <h2><span class="icon">⚡</span> 已设定的自主高级任务</h2>
+            <span class="task-count-badge" id="customTaskCount">0 项</span>
+          </div>
+
+          <div class="task-list-wrapper" id="customTaskList">
+            <div class="empty-state">
+              <p>暂无自主高级任务，请在左侧配置并保存规则</p>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
   </div>
 
-  <!-- Custom Modal Overlay -->
+  <!-- Custom Confirm / Alert Modal Overlay -->
   <div id="customModalOverlay" class="modal-overlay">
     <div class="modal-card">
       <div class="modal-header">
@@ -124,6 +233,27 @@
       <div id="modalFooter" class="modal-footer">
         <button id="modalCancelBtn" class="modal-btn secondary">取消</button>
         <button id="modalConfirmBtn" class="modal-btn danger">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top-Most Trigger Alert Popup Overlay -->
+  <div id="topmostModalOverlay" class="modal-overlay">
+    <div class="modal-card topmost-alert-card">
+      <div class="modal-header">
+        <div class="modal-icon-box warning">🔔</div>
+        <div>
+          <h3 id="topmostTitle" class="modal-title">高级定时任务触发提醒！</h3>
+          <span id="topmostSubtitle" style="font-size:11px; color:#a1a1aa;">任务已按计划到期触发</span>
+        </div>
+      </div>
+      <div class="modal-body">
+        <div id="topmostPopupsList" class="popups-list">
+          <!-- Popups will be inserted here -->
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button id="topmostCloseBtn" class="modal-btn primary">确认并关闭窗口</button>
       </div>
     </div>
   </div>

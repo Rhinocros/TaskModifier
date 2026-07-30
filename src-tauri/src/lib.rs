@@ -19,9 +19,36 @@ pub struct TaskRule {
     pub created_at: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TimeWindow {
+    pub start_time: Option<String>, // "YYYY-MM-DD HH:mm:ss"
+    pub end_time: Option<String>,   // "YYYY-MM-DD HH:mm:ss"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomTaskRule {
+    pub id: String,
+    pub name: String,
+    pub is_enabled: bool,
+    #[serde(default)]
+    pub enable_window_start: Option<String>,
+    #[serde(default)]
+    pub enable_window_end: Option<String>,
+    #[serde(default)]
+    pub enable_windows: Vec<TimeWindow>,     // 多个启用/禁用有效时间区间
+    pub trigger_datetimes: Vec<String>,       // 多个不规则时间点
+    pub executables: Vec<String>,             // 多个执行程序路径/命令行
+    pub popup_messages: Vec<String>,          // 多个显示弹窗内容
+    pub always_on_top: bool,                  // 弹窗置顶
+    #[serde(default)]
+    pub triggered_history: Vec<String>,       // 已触发记录
+    pub created_at: String,
+}
+
 #[derive(Default)]
 pub struct AppState {
     pub tasks: Arc<Mutex<Vec<TaskRule>>>,
+    pub custom_tasks: Arc<Mutex<Vec<CustomTaskRule>>>,
 }
 
 fn get_config_path() -> PathBuf {
@@ -31,6 +58,15 @@ fn get_config_path() -> PathBuf {
         }
     }
     PathBuf::from("tasks.json")
+}
+
+fn get_custom_config_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(dir) = exe_path.parent() {
+            return dir.join("custom_tasks.json");
+        }
+    }
+    PathBuf::from("custom_tasks.json")
 }
 
 fn load_tasks_from_disk() -> Vec<TaskRule> {
@@ -52,7 +88,25 @@ fn save_tasks_to_disk(tasks: &[TaskRule]) {
     }
 }
 
-// 帮助函数：解码 Windows 输出为 UTF-8 字符串
+fn load_custom_tasks_from_disk() -> Vec<CustomTaskRule> {
+    let path = get_custom_config_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(tasks) = serde_json::from_str::<Vec<CustomTaskRule>>(&content) {
+                return tasks;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_custom_tasks_to_disk(tasks: &[CustomTaskRule]) {
+    let path = get_custom_config_path();
+    if let Ok(json) = serde_json::to_string_pretty(tasks) {
+        let _ = fs::write(path, json);
+    }
+}
+
 fn decode_win_output(bytes: &[u8]) -> String {
     let (cow, _, has_errors) = GBK.decode(bytes);
     if !has_errors {
@@ -62,7 +116,6 @@ fn decode_win_output(bytes: &[u8]) -> String {
     }
 }
 
-// 检查并在未具备管理员权限时通过 runas 自动触发 UAC 提权
 #[cfg(target_os = "windows")]
 fn ensure_admin_privileges() {
     use std::env;
@@ -86,10 +139,9 @@ fn ensure_admin_privileges() {
                     exe_wide.as_ptr(),
                     null_mut(),
                     null_mut(),
-                    1, // SW_SHOWNORMAL
+                    1,
                 );
 
-                // 若成功触发 UAC 并拉起管理员子进程，退出当前非管理员进程
                 if res as usize > 32 {
                     std::process::exit(0);
                 }
@@ -98,7 +150,6 @@ fn ensure_admin_privileges() {
     }
 }
 
-// 执行 Windows schtasks 命令修改计划任务状态
 fn run_schtasks_cmd(task_name: &str, action_flag: &str) -> (bool, String) {
     #[cfg(target_os = "windows")]
     {
@@ -141,32 +192,77 @@ fn execute_schtasks(task_name: &str, action: &str) -> Result<String, String> {
 
     let action_zh = if action.to_uppercase() == "ENABLE" { "启用" } else { "禁用" };
 
-    // 1. 尝试直接按原名称修改
     let (ok1, msg1) = run_schtasks_cmd(task_name, action_flag);
     if ok1 {
-        return Ok(format!("已成功设置为【{}】(系统提示: {}) [注: 若任务计划程序窗口已打开，请按 F5 刷新页面查看最新的“{}”状态]", action_zh, msg1, action_zh));
+        return Ok(format!("已成功设置为【{}】(系统提示: {}) [注: 若任务计划程序窗口已打开，请按 F5 刷新页面查看状态]", action_zh, msg1));
     }
 
-    // 2. 如果失败且名称开头没有 '\'，尝试加上根路径 '\' 重试
     if !task_name.starts_with('\\') {
         let alt_name = format!("\\{}", task_name);
         let (ok2, msg2) = run_schtasks_cmd(&alt_name, action_flag);
         if ok2 {
-            return Ok(format!("已成功设置为【{}】(系统提示: {}) [注: 请在任务计划程序窗口按 F5 刷新查看状态]", action_zh, msg2));
+            return Ok(format!("已成功设置为【{}】(系统提示: {}) [注: 请按 F5 刷新查看状态]", action_zh, msg2));
         }
     }
 
     Err(format!("修改失败: {}", msg1))
 }
 
-// Tauri IPC API: 获取当前所有任务
+fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskRule) {
+    for exe in &task.executables {
+        let exe_str = exe.trim().to_string();
+        if !exe_str.is_empty() {
+            std::thread::spawn(move || {
+                #[cfg(target_os = "windows")]
+                {
+                    use std::os::windows::process::CommandExt;
+                    const CREATE_NO_WINDOW: u32 = 0x08000000;
+                    let _ = Command::new("cmd")
+                        .args(["/C", &exe_str])
+                        .creation_flags(CREATE_NO_WINDOW)
+                        .spawn();
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = Command::new("sh").args(["-c", &exe_str]).spawn();
+                }
+            });
+        }
+    }
+
+    use tauri::Manager;
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        if task.always_on_top {
+            let _ = window.set_always_on_top(true);
+        }
+        let _ = window.set_focus();
+    }
+
+    #[derive(Serialize, Clone)]
+    struct TriggerPayload {
+        task_name: String,
+        popup_messages: Vec<String>,
+        always_on_top: bool,
+    }
+
+    let payload = TriggerPayload {
+        task_name: task.name.clone(),
+        popup_messages: task.popup_messages.clone(),
+        always_on_top: task.always_on_top,
+    };
+
+    let _ = app_handle.emit("custom_task_triggered", payload);
+}
+
+// ----------------- Tauri IPC APIs (标准系统计划任务) -----------------
 #[tauri::command]
 fn get_tasks(state: tauri::State<'_, AppState>) -> Vec<TaskRule> {
     let tasks = state.tasks.lock().unwrap();
     tasks.clone()
 }
 
-// Tauri IPC API: 添加新修改任务
 #[tauri::command]
 fn add_task(
     state: tauri::State<'_, AppState>,
@@ -174,7 +270,6 @@ fn add_task(
     target_time: String,
     action: String,
 ) -> Result<TaskRule, String> {
-    // 校验日期时间格式
     if NaiveDateTime::parse_from_str(&target_time, "%Y-%m-%d %H:%M:%S").is_err() {
         return Err("时间格式必须为 YYYY-MM-DD HH:mm:ss".into());
     }
@@ -199,7 +294,6 @@ fn add_task(
     Ok(new_rule)
 }
 
-// Tauri IPC API: 删除任务
 #[tauri::command]
 fn delete_task(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
     let mut tasks = state.tasks.lock().unwrap();
@@ -208,7 +302,6 @@ fn delete_task(state: tauri::State<'_, AppState>, id: String) -> Result<(), Stri
     Ok(())
 }
 
-// Tauri IPC API: 手动即时测试执行
 #[tauri::command]
 fn execute_task_now(state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let mut tasks = state.tasks.lock().unwrap();
@@ -232,17 +325,100 @@ fn execute_task_now(state: tauri::State<'_, AppState>, id: String) -> Result<Str
     }
 }
 
-// 后台高精度到期轮询任务
-fn start_background_scheduler(app_handle: tauri::AppHandle, tasks_mutex: Arc<Mutex<Vec<TaskRule>>>) {
+// ----------------- Tauri IPC APIs (高级自主任务引擎) -----------------
+#[tauri::command]
+fn get_custom_tasks(state: tauri::State<'_, AppState>) -> Vec<CustomTaskRule> {
+    let tasks = state.custom_tasks.lock().unwrap();
+    tasks.clone()
+}
+
+#[tauri::command]
+fn add_custom_task(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    enable_windows: Vec<TimeWindow>,
+    trigger_datetimes: Vec<String>,
+    executables: Vec<String>,
+    popup_messages: Vec<String>,
+    always_on_top: bool,
+) -> Result<CustomTaskRule, String> {
+    if name.trim().is_empty() {
+        return Err("自定义任务名称不能为空".into());
+    }
+
+    let now_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let id = format!("custom_{}", Local::now().timestamp_millis());
+
+    let rule = CustomTaskRule {
+        id,
+        name: name.trim().to_string(),
+        is_enabled: true,
+        enable_window_start: None,
+        enable_window_end: None,
+        enable_windows,
+        trigger_datetimes: trigger_datetimes.into_iter().filter(|s| !s.trim().is_empty()).collect(),
+        executables: executables.into_iter().filter(|s| !s.trim().is_empty()).collect(),
+        popup_messages: popup_messages.into_iter().filter(|s| !s.trim().is_empty()).collect(),
+        always_on_top,
+        triggered_history: Vec::new(),
+        created_at: now_str,
+    };
+
+    let mut tasks = state.custom_tasks.lock().unwrap();
+    tasks.push(rule.clone());
+    save_custom_tasks_to_disk(&tasks);
+
+    Ok(rule)
+}
+
+#[tauri::command]
+fn delete_custom_task(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut tasks = state.custom_tasks.lock().unwrap();
+    tasks.retain(|t| t.id != id);
+    save_custom_tasks_to_disk(&tasks);
+    Ok(())
+}
+
+#[tauri::command]
+fn toggle_custom_task(state: tauri::State<'_, AppState>, id: String, is_enabled: bool) -> Result<(), String> {
+    let mut tasks = state.custom_tasks.lock().unwrap();
+    if let Some(t) = tasks.iter_mut().find(|task| task.id == id) {
+        t.is_enabled = is_enabled;
+        save_custom_tasks_to_disk(&tasks);
+        Ok(())
+    } else {
+        Err("找不到指定自定义任务".into())
+    }
+}
+
+#[tauri::command]
+fn execute_custom_task_now(app_handle: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
+    let tasks = state.custom_tasks.lock().unwrap();
+    if let Some(t) = tasks.iter().find(|task| task.id == id) {
+        trigger_custom_task_actions(&app_handle, t);
+        Ok("已成功手动即时触发该自定义任务！".to_string())
+    } else {
+        Err("找不到指定自定义任务".into())
+    }
+}
+
+// ----------------- 后台高精度到期轮询任务 -----------------
+fn start_background_scheduler(
+    app_handle: tauri::AppHandle,
+    tasks_mutex: Arc<Mutex<Vec<TaskRule>>>,
+    custom_tasks_mutex: Arc<Mutex<Vec<CustomTaskRule>>>,
+) {
     tauri::async_runtime::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             let now = Local::now();
             let now_naive = now.naive_local();
+            let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
 
-            let mut should_save = false;
-            let mut tasks_to_notify: Vec<(TaskRule, Result<String, String>)> = Vec::new();
+            // 1. 系统计划任务修改器检测
+            let mut should_save_tasks = false;
+            let mut tasks_to_notify = false;
 
             {
                 let mut tasks = tasks_mutex.lock().unwrap();
@@ -250,7 +426,6 @@ fn start_background_scheduler(app_handle: tauri::AppHandle, tasks_mutex: Arc<Mut
                     if task.status == "PENDING" {
                         if let Ok(target) = NaiveDateTime::parse_from_str(&task.target_time, "%Y-%m-%d %H:%M:%S") {
                             if now_naive >= target {
-                                // 到期！触发修改命令
                                 let res = execute_schtasks(&task.task_name, &task.action);
                                 match &res {
                                     Ok(msg) => {
@@ -262,21 +437,87 @@ fn start_background_scheduler(app_handle: tauri::AppHandle, tasks_mutex: Arc<Mut
                                         task.log_message = Some(err.clone());
                                     }
                                 }
-                                should_save = true;
-                                tasks_to_notify.push((task.clone(), res));
+                                should_save_tasks = true;
+                                tasks_to_notify = true;
                             }
                         }
                     }
                 }
 
-                if should_save {
+                if should_save_tasks {
                     save_tasks_to_disk(&tasks);
                 }
             }
 
-            // 发送事件通知前端
-            if !tasks_to_notify.is_empty() {
+            if tasks_to_notify {
                 let _ = app_handle.emit("tasks_updated", ());
+            }
+
+            // 2. 高级自主任务引擎检测 (支持多组有效启用时间窗口)
+            let mut should_save_custom = false;
+            let mut custom_updated = false;
+
+            {
+                let mut custom_tasks = custom_tasks_mutex.lock().unwrap();
+                for task in custom_tasks.iter_mut() {
+                    let mut in_time_window = true;
+                    let mut windows = task.enable_windows.clone();
+
+                    // 兼容单区间旧数据
+                    if windows.is_empty() && (task.enable_window_start.is_some() || task.enable_window_end.is_some()) {
+                        windows.push(TimeWindow {
+                            start_time: task.enable_window_start.clone(),
+                            end_time: task.enable_window_end.clone(),
+                        });
+                    }
+
+                    if !windows.is_empty() {
+                        in_time_window = false;
+                        for win in &windows {
+                            let mut match_win = true;
+                            if let Some(start_str) = &win.start_time {
+                                if let Ok(start_dt) = NaiveDateTime::parse_from_str(start_str, "%Y-%m-%d %H:%M:%S") {
+                                    if now_naive < start_dt {
+                                        match_win = false;
+                                    }
+                                }
+                            }
+                            if let Some(end_str) = &win.end_time {
+                                if let Ok(end_dt) = NaiveDateTime::parse_from_str(end_str, "%Y-%m-%d %H:%M:%S") {
+                                    if now_naive > end_dt {
+                                        match_win = false;
+                                    }
+                                }
+                            }
+                            if match_win {
+                                in_time_window = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    if !task.is_enabled || !in_time_window {
+                        continue;
+                    }
+
+                    // 校验触发时刻
+                    for dt in &task.trigger_datetimes {
+                        if dt == &now_str && !task.triggered_history.contains(dt) {
+                            task.triggered_history.push(dt.clone());
+                            should_save_custom = true;
+                            custom_updated = true;
+                            trigger_custom_task_actions(&app_handle, task);
+                        }
+                    }
+                }
+
+                if should_save_custom {
+                    save_custom_tasks_to_disk(&custom_tasks);
+                }
+            }
+
+            if custom_updated {
+                let _ = app_handle.emit("custom_tasks_updated", ());
             }
         }
     });
@@ -290,8 +531,12 @@ pub fn run() {
     let initial_tasks = load_tasks_from_disk();
     let tasks_mutex = Arc::new(Mutex::new(initial_tasks));
 
+    let initial_custom_tasks = load_custom_tasks_from_disk();
+    let custom_tasks_mutex = Arc::new(Mutex::new(initial_custom_tasks));
+
     let app_state = AppState {
         tasks: tasks_mutex.clone(),
+        custom_tasks: custom_tasks_mutex.clone(),
     };
 
     tauri::Builder::default()
@@ -301,13 +546,17 @@ pub fn run() {
             get_tasks,
             add_task,
             delete_task,
-            execute_task_now
+            execute_task_now,
+            get_custom_tasks,
+            add_custom_task,
+            delete_custom_task,
+            toggle_custom_task,
+            execute_custom_task_now
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            start_background_scheduler(handle, tasks_mutex);
+            start_background_scheduler(handle, tasks_mutex, custom_tasks_mutex);
 
-            // 配置托盘菜单与右下角常驻系统托盘
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
             use tauri::Manager;
@@ -319,7 +568,7 @@ pub fn run() {
             let _tray = TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
-                .tooltip("Windows 计划任务定时修改器 (运行中)")
+                .tooltip("Windows 计划任务定时修改器 (后台常驻服务)")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     "quit" => {
                         std::process::exit(0);
@@ -351,7 +600,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| match event {
-            // 拦截关闭按钮 X，隐藏到系统托盘而非销毁窗口
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 api.prevent_close();
                 let _ = window.hide();

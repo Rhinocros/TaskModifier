@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "identifier": "com.antigravity.taskmodifier",
   "build": {
+    "beforeDevCommand": "npx -y serve src -p 1420",
+    "devUrl": "http://localhost:1420",
     "frontendDist": "../src"
   },
   "app": {
