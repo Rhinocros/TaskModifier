@@ -1,0 +1,83 @@
+name: Build Windows Executables
+
+on:
+  push:
+    branches: [ "main", "master" ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ "main", "master" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch_name }})
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            arch_name: x64
+          - target: aarch64-pc-windows-msvc
+            arch_name: arm64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install Rust target
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build Tauri App
+        run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Locate and prepare executable
+        shell: powershell
+        run: |
+          $target = "${{ matrix.target }}"
+          $arch = "${{ matrix.arch_name }}"
+          $exePath = "src-tauri/target/$target/release/TaskModifier.exe"
+          $distDir = "dist"
+          
+          if (-not (Test-Path $distDir)) {
+              New-Item -ItemType Directory -Path $distDir
+          }
+          
+          if (Test-Path $exePath) {
+              Copy-Item $exePath -Destination "$distDir/TaskModifier-windows-$arch.exe"
+              Write-Host "Successfully copied $exePath to $distDir/TaskModifier-windows-$arch.exe"
+          } else {
+              Write-Error "Could not find built executable at $exePath"
+              exit 1
+          }
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TaskModifier-windows-${{ matrix.arch_name }}
+          path: dist/TaskModifier-windows-${{ matrix.arch_name }}.exe
+
+      - name: Upload to Release (On Tag Push)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/TaskModifier-windows-${{ matrix.arch_name }}.exe
