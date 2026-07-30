@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Windows 计划任务定时修改器</title>
+  <link rel="icon" type="image/jpeg" href="assets/app_icon.jpg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="logo-icon">
+          <img src="assets/app_icon.jpg" alt="App Icon">
+        </div>
+        <div>
+          <h1>计划任务调度器</h1>
+          <p class="subtitle">Scheduled Task Modifier • Native Windows Engine</p>
+        </div>
+      </div>
+
+      <div class="header-status">
+        <div class="status-badge admin">
+          <span class="dot"></span> 管理员权限运行中
+        </div>
+        <div class="clock-box" id="liveClock">00:00:00</div>
+      </div>
+    </header>
+
+    <!-- Main Grid -->
+    <main class="app-main">
+      <!-- Left Column: Add Task Card -->
+      <section class="card form-card">
+        <div class="card-header">
+          <h2><span class="icon">➕</span> 添加修改规则</h2>
+        </div>
+        
+        <form id="addRuleForm" onsubmit="return false;">
+          <div class="form-group">
+            <label for="taskName">Windows 计划任务名称</label>
+            <div class="input-wrapper">
+              <input type="text" id="taskName" placeholder="例如: MyBackupTask 或 计划任务测试" required />
+            </div>
+            <span class="help-text">须与 Windows 任务计划程序中的“任务名称”完全一致</span>
+          </div>
+
+          <div class="form-group">
+            <label for="targetDatetime">修改生效时间 (日期与精确时刻)</label>
+            <input type="datetime-local" id="targetDatetime" step="1" required />
+            <div class="quick-preset">
+              <button type="button" class="preset-btn reset" onclick="resetToNow()">设为现在</button>
+              <button type="button" class="preset-btn" onclick="setPresetOffset(1)">+1 分钟</button>
+              <button type="button" class="preset-btn" onclick="setPresetOffset(5)">+5 分钟</button>
+              <button type="button" class="preset-btn" onclick="setPresetOffset(30)">+30 分钟</button>
+              <button type="button" class="preset-btn" onclick="setPresetOffset(60)">+1 小时</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>到期目标状态</label>
+            <div class="radio-toggle">
+              <label class="radio-option enable">
+                <input type="radio" name="targetAction" value="ENABLE" checked />
+                <span class="btn-text">🟢 启用任务 (ENABLE)</span>
+              </label>
+              <label class="radio-option disable">
+                <input type="radio" name="targetAction" value="DISABLE" />
+                <span class="btn-text">🔴 禁用任务 (DISABLE)</span>
+              </label>
+            </div>
+          </div>
+
+          <button type="submit" id="submitBtn" class="primary-btn">
+            <span>保存调度规则</span>
+          </button>
+        </form>
+      </section>
+
+      <!-- Right Column: Task List & Logs -->
+      <section class="right-column">
+        <!-- Task Queue Card -->
+        <div class="card list-card">
+          <div class="card-header">
+            <h2><span class="icon">📋</span> 已设定的修改队列</h2>
+            <span class="task-count-badge" id="taskCount">0 项</span>
+          </div>
+
+          <div class="task-list-wrapper" id="taskList">
+            <div class="empty-state">
+              <p>暂无排期的修改任务，请在左侧添加规则</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Logs Card -->
+        <div class="card logs-card">
+          <div class="card-header">
+            <h2><span class="icon">💻</span> 调度日志终端</h2>
+            <button class="text-btn" onclick="clearLogs()">清空日志</button>
+          </div>
+          <div class="log-terminal" id="logTerminal">
+            <div class="log-entry system">[系统准备就绪] 调度监视器服务已在后台高精度运行（点击关闭窗口将最小化至托盘）...</div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Custom Modal Overlay -->
+  <div id="customModalOverlay" class="modal-overlay">
+    <div class="modal-card">
+      <div class="modal-header">
+        <div id="modalIconBox" class="modal-icon-box warning">⚠️</div>
+        <h3 id="modalTitle" class="modal-title">提示</h3>
+      </div>
+      <div id="modalBody" class="modal-body">
+        内容...
+      </div>
+      <div id="modalFooter" class="modal-footer">
+        <button id="modalCancelBtn" class="modal-btn secondary">取消</button>
+        <button id="modalConfirmBtn" class="modal-btn danger">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="main.js" type="module"></script>
+</body>
+</html>
