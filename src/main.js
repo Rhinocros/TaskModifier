@@ -557,7 +557,25 @@ window.initCustomDatePickers = function(container = document) {
 };
 
 // ----------------- 日期与字符串工具 -----------------
+function parseCustomDate(str) {
+  if (!str) return null;
+  if (str instanceof Date) return isNaN(str.getTime()) ? null : str;
+  if (typeof str !== "string") str = String(str);
+  const nums = str.match(/\d+/g);
+  if (!nums || nums.length < 3) return null;
+  const year = parseInt(nums[0], 10);
+  const month = parseInt(nums[1], 10) - 1;
+  const day = parseInt(nums[2], 10);
+  const hour = nums.length > 3 ? parseInt(nums[3], 10) : 0;
+  const min = nums.length > 4 ? parseInt(nums[4], 10) : 0;
+  const sec = nums.length > 5 ? parseInt(nums[5], 10) : 0;
+
+  const d = new Date(year, month, day, hour, min, sec);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function formatToDatetimeInputValue(dateObj) {
+  if (!dateObj || !(dateObj instanceof Date) || isNaN(dateObj.getTime())) return "";
   const year = dateObj.getFullYear();
   const month = String(dateObj.getMonth() + 1).padStart(2, '0');
   const day = String(dateObj.getDate()).padStart(2, '0');
@@ -569,15 +587,12 @@ function formatToDatetimeInputValue(dateObj) {
 
 function formatDatetimeString(dateStr) {
   if (!dateStr) return "";
-  const date = new Date(dateStr.replace(/\//g, "-").replace("T", " "));
-  if (isNaN(date.getTime())) return dateStr;
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const mins = String(date.getMinutes()).padStart(2, '0');
-  const secs = String(date.getSeconds()).padStart(2, '0');
-  return `${year}/${month}/${day} ${hours}:${mins}:${secs}`;
+  if (dateStr instanceof Date) {
+    return formatToDatetimeInputValue(dateStr);
+  }
+  const date = parseCustomDate(dateStr);
+  if (!date) return String(dateStr);
+  return formatToDatetimeInputValue(date);
 }
 
 window.resetToNow = () => {
@@ -588,9 +603,8 @@ window.resetToNow = () => {
 window.setPresetOffset = (minutes) => {
   let baseDate = new Date();
   if (targetDatetimeInput.value) {
-    const currentVal = targetDatetimeInput.value.replace(/\//g, '-').replace('T', ' ');
-    const parsed = new Date(currentVal);
-    if (!isNaN(parsed.getTime())) {
+    const parsed = parseCustomDate(targetDatetimeInput.value);
+    if (parsed) {
       baseDate = parsed;
     }
   }
@@ -1019,7 +1033,9 @@ window.testExecuteNow = async (id) => {
 
 function calculateCountdown(targetTimeStr) {
   if (!targetTimeStr) return "";
-  const target = new Date(targetTimeStr.replace(/\//g, "-").replace("T", " ")).getTime();
+  const targetDate = parseCustomDate(targetTimeStr);
+  if (!targetDate) return "";
+  const target = targetDate.getTime();
   const now = new Date().getTime();
   const diff = target - now;
 
@@ -1085,8 +1101,8 @@ function getNextTriggerDateForCustomTask(task) {
   // 1. 检查不规则固定时刻
   if (task.trigger_datetimes && task.trigger_datetimes.length > 0) {
     for (const dtStr of task.trigger_datetimes) {
-      const dt = new Date(dtStr.replace(/\//g, "-").replace("T", " "));
-      if (!isNaN(dt.getTime()) && dt.getTime() > nowTime) {
+      const dt = parseCustomDate(dtStr);
+      if (dt && dt.getTime() > nowTime) {
         candidates.push(dt);
       }
     }
@@ -1198,7 +1214,7 @@ async function handleAddCustomTask(e) {
     .filter(val => val.length > 0);
 
   if (!recurrence && triggerTimes.length === 0) {
-    showCustomAlert("请设置循环模式或至少设置一个不规则触发时间点");
+    showCustomAlert("请设置定时循环周期（如每天、每周、工作日）或输入具体不规则触发时间");
     return;
   }
 
@@ -1213,6 +1229,11 @@ async function handleAddCustomTask(e) {
   const popupMessages = Array.from(popupInputs)
     .map(input => input.value.trim())
     .filter(val => val.length > 0);
+
+  if (executables.length === 0 && popupMessages.length === 0) {
+    showCustomAlert("请至少配置一项“触发执行程序”或“显示弹窗提醒”");
+    return;
+  }
 
   const alwaysOnTop = customAlwaysOnTopInput.checked;
 
@@ -1231,8 +1252,16 @@ async function handleAddCustomTask(e) {
     });
 
     const recurLabel = formatRecurrenceText(recurrence);
-    appendLog(`已保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
+    appendLog(`已成功保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
     customTaskNameInput.value = "";
+    
+    // 清空内部已录入的时间框与程序/弹窗输入
+    document.querySelectorAll("#tab-custom .trigger-time-input").forEach(i => i.value = "");
+    document.querySelectorAll("#tab-custom .window-start-input").forEach(i => i.value = "");
+    document.querySelectorAll("#tab-custom .window-end-input").forEach(i => i.value = "");
+    document.querySelectorAll("#tab-custom .executable-input").forEach(i => i.value = "");
+    document.querySelectorAll("#tab-custom .popup-input").forEach(i => i.value = "");
+
     fetchCustomTasks();
   } catch (err) {
     appendLog(`保存自主高级任务失败: ${err}`, "error");
