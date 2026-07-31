@@ -631,7 +631,8 @@ fn add_task(
     date_group_ids: Option<Vec<String>>,
     date_group_mode: Option<String>,
 ) -> Result<TaskRule, String> {
-    if NaiveDateTime::parse_from_str(&target_time, "%Y-%m-%d %H:%M:%S").is_err() {
+    let clean_target_time = target_time.trim().replace('/', "-");
+    if NaiveDateTime::parse_from_str(&clean_target_time, "%Y-%m-%d %H:%M:%S").is_err() {
         return Err("时间格式必须为 YYYY-MM-DD HH:mm:ss".into());
     }
 
@@ -641,7 +642,7 @@ fn add_task(
     let new_rule = TaskRule {
         id,
         task_name: task_name.trim().to_string(),
-        target_time,
+        target_time: clean_target_time,
         action: action.to_uppercase(),
         status: "PENDING".into(),
         log_message: None,

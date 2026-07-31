@@ -587,12 +587,15 @@ function formatToDatetimeInputValue(dateObj) {
 
 function formatDatetimeString(dateStr) {
   if (!dateStr) return "";
+  let str = "";
   if (dateStr instanceof Date) {
-    return formatToDatetimeInputValue(dateStr);
+    str = formatToDatetimeInputValue(dateStr);
+  } else {
+    const date = parseCustomDate(dateStr);
+    if (!date) str = String(dateStr);
+    else str = formatToDatetimeInputValue(date);
   }
-  const date = parseCustomDate(dateStr);
-  if (!date) return String(dateStr);
-  return formatToDatetimeInputValue(date);
+  return str.replace(/\//g, "-");
 }
 
 window.resetToNow = () => {

@@ -14,8 +14,10 @@
       {
         "label": "main",
         "title": "Windows 计划任务定时修改器",
-        "width": 1020,
-        "height": 700,
+        "width": 1200,
+        "height": 840,
+        "minWidth": 1040,
+        "minHeight": 720,
         "resizable": true,
         "center": true
       }
