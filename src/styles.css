@@ -239,6 +239,13 @@ body {
   min-height: 0;
 }
 
+.list-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
 /* Cards */
 .card {
   background: var(--card-bg);
@@ -782,7 +789,8 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  max-height: 380px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding-right: 4px;
 }
