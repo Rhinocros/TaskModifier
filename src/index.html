@@ -25,11 +25,14 @@
       </div>
 
       <div class="header-status">
+        <button type="button" class="holiday-status-btn" id="openDateGroupModalBtn" title="点击手动设置与管理自定义日期时间组" style="background: rgba(56, 189, 248, 0.1); border-color: rgba(56, 189, 248, 0.3); color: #38bdf8;">
+          🗓️ 日期时间组 <span id="dateGroupStatusText" class="badge-num">(0个组)</span>
+        </button>
         <button type="button" class="holiday-status-btn" id="syncHolidaysBtn" title="点击手动同步最新法定节假日及调休安排">
-          📅 节假日日历: <span id="holidayStatusText">获取中...</span>
+          📅 节假日日历 <span id="holidayStatusText" class="badge-num">(获取中...)</span>
         </button>
         <div class="status-badge admin">
-          <span class="dot"></span> 管理员权限运行中
+          <span class="dot"></span> 管理员运行
         </div>
         <div class="clock-box" id="liveClock">00:00:00</div>
       </div>
@@ -54,43 +57,94 @@
         </div>
         
         <form id="addRuleForm" onsubmit="return false;">
-          <div class="form-group">
-            <label for="taskName">Windows 计划任务名称</label>
-            <div class="input-wrapper">
-              <input type="text" id="taskName" placeholder="例如: MyBackupTask 或 计划任务测试" required />
-            </div>
-            <span class="help-text">须与 Windows 任务计划程序中的“任务名称”完全一致</span>
+          <!-- Form Sub-Tab Nav -->
+          <div class="form-subtabs sys-tabs">
+            <button type="button" class="form-subtab-btn active" onclick="switchFormSubTab('sys', 'basic')">📌 基础配置</button>
+            <button type="button" class="form-subtab-btn" onclick="switchFormSubTab('sys', 'time')">⏱️ 生效时刻</button>
+            <button type="button" class="form-subtab-btn" onclick="switchFormSubTab('sys', 'dategroup')">📆 特例规则</button>
           </div>
 
-          <div class="form-group">
-            <label for="targetDatetime">修改生效时间 (日期与波段时刻)</label>
-            <div class="custom-datetime-wrapper">
-              <input type="text" id="targetDatetime" placeholder="YYYY/MM/DD --:--:--" required />
+          <!-- Section 1: 基础配置 -->
+          <div id="sysFormPanel-basic" class="form-subpanel active">
+            <div class="form-group">
+              <label for="taskName">Windows 计划任务名称</label>
+              <div class="input-wrapper">
+                <input type="text" id="taskName" placeholder="例如: MyBackupTask 或 计划任务测试" required />
+              </div>
+              <span class="help-text">须与 Windows 任务计划程序中的“任务名称”完全一致</span>
             </div>
-            <div class="quick-preset">
-              <button type="button" class="preset-btn reset" onclick="resetToNow()">设为现在</button>
-              <button type="button" class="preset-btn" onclick="setPresetOffset(1)">+1 分钟</button>
-              <button type="button" class="preset-btn" onclick="setPresetOffset(5)">+5 分钟</button>
-              <button type="button" class="preset-btn" onclick="setPresetOffset(30)">+30 分钟</button>
-              <button type="button" class="preset-btn" onclick="setPresetOffset(60)">+1 小时</button>
-            </div>
-          </div>
 
-          <div class="form-group">
-            <label>到期目标状态</label>
-            <div class="radio-toggle">
-              <label class="radio-option enable">
-                <input type="radio" name="targetAction" value="ENABLE" checked />
-                <span class="btn-text">🟢 启用任务 (ENABLE)</span>
-              </label>
-              <label class="radio-option disable">
-                <input type="radio" name="targetAction" value="DISABLE" />
-                <span class="btn-text">🔴 禁用任务 (DISABLE)</span>
-              </label>
+            <div class="form-group">
+              <label>到期目标状态</label>
+              <div class="radio-toggle">
+                <label class="radio-option enable">
+                  <input type="radio" name="targetAction" value="ENABLE" checked />
+                  <span class="btn-text">🟢 启用任务 (ENABLE)</span>
+                </label>
+                <label class="radio-option disable">
+                  <input type="radio" name="targetAction" value="DISABLE" />
+                  <span class="btn-text">🔴 禁用任务 (DISABLE)</span>
+                </label>
+              </div>
             </div>
           </div>
 
-          <button type="submit" id="submitBtn" class="primary-btn">
+          <!-- Section 2: 生效时刻 -->
+          <div id="sysFormPanel-time" class="form-subpanel">
+            <div class="form-group">
+              <label for="targetDatetime">修改生效时间 (日期与波段时刻)</label>
+              <div class="custom-datetime-wrapper">
+                <input type="text" id="targetDatetime" placeholder="YYYY/MM/DD --:--:--" required />
+              </div>
+              <div class="quick-preset">
+                <button type="button" class="preset-btn reset" onclick="resetToNow()">设为现在</button>
+                <button type="button" class="preset-btn" onclick="setPresetOffset(1)">+1 分钟</button>
+                <button type="button" class="preset-btn" onclick="setPresetOffset(5)">+5 分钟</button>
+                <button type="button" class="preset-btn" onclick="setPresetOffset(30)">+30 分钟</button>
+                <button type="button" class="preset-btn" onclick="setPresetOffset(60)">+1 小时</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 3: 特例/日期组 -->
+          <div id="sysFormPanel-dategroup" class="form-subpanel">
+            <div class="form-group">
+              <label>关联特例日期时间组 (可选)</label>
+              <div id="sysDateGroupsContainer" class="date-groups-select-wrap">
+                <!-- 动态填充可勾选的日期组芯片 -->
+              </div>
+              <span class="help-text">选中后，可根据下方特例规则设定在该组日期中的触发逻辑</span>
+            </div>
+
+            <div class="form-group">
+              <label>特例处理规则</label>
+              <div class="radio-stack">
+                <label class="radio-card">
+                  <input type="radio" name="sysDateGroupMode" value="NONE" checked />
+                  <div>
+                    <span class="title">⚪ 正常规则 (不使用日期组特例)</span>
+                    <span class="desc">按设定的目标生效时间正常触发。</span>
+                  </div>
+                </label>
+                <label class="radio-card warning">
+                  <input type="radio" name="sysDateGroupMode" value="EXCLUDE" />
+                  <div>
+                    <span class="title">🚫 遇选中日期组：不触发 (例外排除)</span>
+                    <span class="desc">即便达到到期时刻，若落在选中日期组内也跳过不修改。</span>
+                  </div>
+                </label>
+                <label class="radio-card success">
+                  <input type="radio" name="sysDateGroupMode" value="FORCE_TRIGGER" />
+                  <div>
+                    <span class="title">⚡ 遇选中日期组：特例/临时触发</span>
+                    <span class="desc">只要处于选中日期组的日期，立即临时触发目标状态修改。</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <button type="submit" id="submitBtn" class="primary-btn" style="margin-top: 12px;">
             <span>保存调度规则</span>
           </button>
         </form>
@@ -134,150 +188,203 @@
         </div>
 
         <form id="addCustomRuleForm" onsubmit="return false;">
-          <div class="form-group">
-            <label for="customTaskName">自主任务名称</label>
-            <input type="text" id="customTaskName" placeholder="例如: 每日定时多提醒与多程序拉起" required />
+          <!-- Form Sub-Tab Nav -->
+          <div class="form-subtabs custom-tabs">
+            <button type="button" class="form-subtab-btn active" onclick="switchFormSubTab('custom', 'basic')">📌 基础</button>
+            <button type="button" class="form-subtab-btn" onclick="switchFormSubTab('custom', 'recur')">⏱️ 循环</button>
+            <button type="button" class="form-subtab-btn" onclick="switchFormSubTab('custom', 'dategroup')">📆 特例</button>
+            <button type="button" class="form-subtab-btn" onclick="switchFormSubTab('custom', 'action')">🚀 动作</button>
           </div>
 
-          <!-- 规则有效启用/禁用时间区间 (可选多个) -->
-          <div class="form-group">
-            <label>规则有效启用时间段 (可选添加多组起点与终点)</label>
-            <div id="enableWindowsContainer" class="multi-input-container">
-              <div class="multi-window-row">
-                <div class="window-inputs-group">
-                  <div class="custom-datetime-wrapper">
-                    <input type="text" class="window-start-input" title="在此时间点后生效启用" placeholder="YYYY/MM/DD --:--:--" />
+          <!-- Section 1: 基础信息 -->
+          <div id="customFormPanel-basic" class="form-subpanel active">
+            <div class="form-group">
+              <label for="customTaskName">自主任务名称</label>
+              <input type="text" id="customTaskName" placeholder="例如: 每日定时多提醒与多程序拉起" required />
+            </div>
+
+            <div class="form-group">
+              <label class="checkbox-label">
+                <input type="checkbox" id="customAlwaysOnTop" checked />
+                <span>📌 触发时窗口自动浮现并强制最上层置顶 (Top-Most)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- Section 2: 循环与时段 -->
+          <div id="customFormPanel-recur" class="form-subpanel">
+            <div class="form-group">
+              <label>定时循环周期 (可选循环模式)</label>
+              <div class="recurrence-box">
+                <div class="mode-grid">
+                  <label class="mode-chip" title="仅按下方设定的具体不规则时刻触发">
+                    <input type="radio" name="customRecurrenceMode" value="ONCE" checked onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">⏱️ 不循环</span>
+                  </label>
+                  <label class="mode-chip" title="每天固定时刻触发">
+                    <input type="radio" name="customRecurrenceMode" value="DAILY" onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">🔄 每天</span>
+                  </label>
+                  <label class="mode-chip" title="每周几固定时刻触发">
+                    <input type="radio" name="customRecurrenceMode" value="WEEKLY" onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">📅 每周/星期</span>
+                  </label>
+                  <label class="mode-chip" title="每月几日固定时刻触发">
+                    <input type="radio" name="customRecurrenceMode" value="MONTHLY" onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">📆 每月几日</span>
+                  </label>
+                  <label class="mode-chip" title="法定工作日触发（自动避开节假日、含调休）">
+                    <input type="radio" name="customRecurrenceMode" value="WORKDAY" onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">💼 法定工作日</span>
+                  </label>
+                  <label class="mode-chip" title="法定节假日放假期间触发">
+                    <input type="radio" name="customRecurrenceMode" value="HOLIDAY" onchange="toggleRecurrenceUI('custom')" />
+                    <span class="chip-label">🎉 法定节假日</span>
+                  </label>
+                </div>
+
+                <!-- WEEKLY 面板 -->
+                <div id="customPanelWEEKLY" class="recurrence-subpanel">
+                  <label>选择星期 (可多选)</label>
+                  <div class="quick-chip-btns">
+                    <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'workday')">周一至周五</button>
+                    <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'weekend')">周末</button>
+                    <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'all')">全选</button>
                   </div>
-                  <span class="window-separator">⬇ 启用至 ⬇</span>
-                  <div class="custom-datetime-wrapper">
-                    <input type="text" class="window-end-input" title="在此时间点后失效禁用" placeholder="YYYY/MM/DD --:--:--" />
+                  <div class="chips-wrap" id="customWeekdaysWrap">
+                    <label class="chip-checkbox"><input type="checkbox" value="1" checked /><span>周一</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="2" checked /><span>周二</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="3" checked /><span>周三</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="4" checked /><span>周四</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="5" checked /><span>周五</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="6" /><span>周六</span></label>
+                    <label class="chip-checkbox"><input type="checkbox" value="7" /><span>周日</span></label>
                   </div>
                 </div>
-                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+
+                <!-- MONTHLY 面板 -->
+                <div id="customPanelMONTHLY" class="recurrence-subpanel">
+                  <label>选择每月日期 (可多选)</label>
+                  <div class="quick-chip-btns">
+                    <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'mid')">1日与15日</button>
+                    <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'last')">月末最后一天</button>
+                  </div>
+                  <div class="chips-wrap" id="customMonthdaysWrap" style="max-height:110px; overflow-y:auto;">
+                    <!-- Dynamically populated 1..31 + 32(月末) -->
+                  </div>
+                </div>
+
+                <!-- 循环时间时刻选择器 (非ONCE模式使用) -->
+                <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
+                  <label for="customTimeOfDay">每日触发时刻 (HH:mm:ss)</label>
+                  <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius:6px; color:#fff;" />
+                </div>
               </div>
             </div>
-            <button type="button" class="add-btn" onclick="addEnableWindowRow()">+ 添加有效时间段</button>
-            <span class="help-text">不填则规则长期保持有效；满足任意一组时间段即自动激活规则</span>
-          </div>
 
-          <!-- 定时循环周期设置 -->
-          <div class="form-group">
-            <label>定时循环周期 (可选循环模式)</label>
-            <div class="recurrence-box">
-              <div class="mode-grid">
-                <label class="mode-chip" title="仅按下方设定的具体不规则时刻触发">
-                  <input type="radio" name="customRecurrenceMode" value="ONCE" checked onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">⏱️ 不循环</span>
-                </label>
-                <label class="mode-chip" title="每天固定时刻触发">
-                  <input type="radio" name="customRecurrenceMode" value="DAILY" onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">🔄 每天</span>
-                </label>
-                <label class="mode-chip" title="每周几固定时刻触发">
-                  <input type="radio" name="customRecurrenceMode" value="WEEKLY" onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">📅 每周/星期</span>
-                </label>
-                <label class="mode-chip" title="每月几日固定时刻触发">
-                  <input type="radio" name="customRecurrenceMode" value="MONTHLY" onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">📆 每月几日</span>
-                </label>
-                <label class="mode-chip" title="法定工作日触发（自动避开节假日、含调休）">
-                  <input type="radio" name="customRecurrenceMode" value="WORKDAY" onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">💼 法定工作日</span>
-                </label>
-                <label class="mode-chip" title="法定节假日放假期间触发">
-                  <input type="radio" name="customRecurrenceMode" value="HOLIDAY" onchange="toggleRecurrenceUI('custom')" />
-                  <span class="chip-label">🎉 法定节假日</span>
-                </label>
-              </div>
-
-              <!-- WEEKLY 面板 -->
-              <div id="customPanelWEEKLY" class="recurrence-subpanel">
-                <label>选择星期 (可多选)</label>
-                <div class="quick-chip-btns">
-                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'workday')">周一至周五</button>
-                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'weekend')">周末</button>
-                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'all')">全选</button>
-                </div>
-                <div class="chips-wrap" id="customWeekdaysWrap">
-                  <label class="chip-checkbox"><input type="checkbox" value="1" checked /><span>周一</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="2" checked /><span>周二</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="3" checked /><span>周三</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="4" checked /><span>周四</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="5" checked /><span>周五</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="6" /><span>周六</span></label>
-                  <label class="chip-checkbox"><input type="checkbox" value="7" /><span>周日</span></label>
+            <!-- 规则有效启用/禁用时间区间 -->
+            <div class="form-group">
+              <label>规则有效启用时间段 (可选添加多组起点与终点)</label>
+              <div id="enableWindowsContainer" class="multi-input-container">
+                <div class="multi-window-row">
+                  <div class="window-inputs-group">
+                    <div class="custom-datetime-wrapper">
+                      <input type="text" class="window-start-input" title="在此时间点后生效启用" placeholder="YYYY/MM/DD --:--:--" />
+                    </div>
+                    <span class="window-separator">⬇ 启用至 ⬇</span>
+                    <div class="custom-datetime-wrapper">
+                      <input type="text" class="window-end-input" title="在此时间点后失效禁用" placeholder="YYYY/MM/DD --:--:--" />
+                    </div>
+                  </div>
+                  <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
                 </div>
               </div>
+              <button type="button" class="add-btn" onclick="addEnableWindowRow()">+ 添加有效时间段</button>
+              <span class="help-text">不填则规则长期保持有效；满足任意一组时间段即自动激活规则</span>
+            </div>
 
-              <!-- MONTHLY 面板 -->
-              <div id="customPanelMONTHLY" class="recurrence-subpanel">
-                <label>选择每月日期 (可多选)</label>
-                <div class="quick-chip-btns">
-                  <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'mid')">1日与15日</button>
-                  <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'last')">月末最后一天</button>
-                </div>
-                <div class="chips-wrap" id="customMonthdaysWrap" style="max-height:110px; overflow-y:auto;">
-                  <!-- Dynamically populated 1..31 + 32(月末) -->
+            <!-- 多个不规则执行时间点 -->
+            <div class="form-group">
+              <label>不规则具体触发时间点 (可选填单次指定时间)</label>
+              <div id="triggerTimesContainer" class="multi-input-container">
+                <div class="multi-input-row">
+                  <div class="custom-datetime-wrapper">
+                    <input type="text" class="trigger-time-input" placeholder="YYYY/MM/DD --:--:--" />
+                  </div>
+                  <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
                 </div>
               </div>
-
-              <!-- 循环时间时刻选择器 (非ONCE模式使用) -->
-              <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
-                <label for="customTimeOfDay">每日触发时刻 (HH:mm:ss)</label>
-                <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius:6px; color:#fff;" />
-              </div>
+              <button type="button" class="add-btn" onclick="addTriggerTimeRow()">+ 添加具体时间</button>
             </div>
           </div>
 
-          <!-- 多个不规则执行时间点 -->
-          <div class="form-group">
-            <label>不规则具体触发时间点 (可选填单次指定时间)</label>
-            <div id="triggerTimesContainer" class="multi-input-container">
-              <div class="multi-input-row">
-                <div class="custom-datetime-wrapper">
-                  <input type="text" class="trigger-time-input" placeholder="YYYY/MM/DD --:--:--" />
+          <!-- Section 3: 特例/日期组 -->
+          <div id="customFormPanel-dategroup" class="form-subpanel">
+            <div class="form-group">
+              <label>关联特例日期时间组 (可选)</label>
+              <div id="customDateGroupsContainer" class="date-groups-select-wrap">
+                <!-- 动态填充可勾选的日期组芯片 -->
+              </div>
+              <span class="help-text">选中后，可根据下方特例规则设定在该组日期中的触发逻辑</span>
+            </div>
+
+            <div class="form-group">
+              <label>特例处理规则</label>
+              <div class="radio-stack">
+                <label class="radio-card">
+                  <input type="radio" name="customDateGroupMode" value="NONE" checked />
+                  <div>
+                    <span class="title">⚪ 正常规则 (不使用日期组特例)</span>
+                    <span class="desc">完全按照循环模式或指定具体时间正常评估触发。</span>
+                  </div>
+                </label>
+                <label class="radio-card warning">
+                  <input type="radio" name="customDateGroupMode" value="EXCLUDE" />
+                  <div>
+                    <span class="title">🚫 遇选中日期组：不触发 (例外排除)</span>
+                    <span class="desc">即便是正常的循环工作日或指定时间，落在该组日期时也跳过不触发。</span>
+                  </div>
+                </label>
+                <label class="radio-card success">
+                  <input type="radio" name="customDateGroupMode" value="FORCE_TRIGGER" />
+                  <div>
+                    <span class="title">⚡ 遇选中日期组：特例/临时触发</span>
+                    <span class="desc">平时不触发的日期（如休息日/非循环日），遇此组日期时强制特例触发。</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Section 4: 执行与弹窗 -->
+          <div id="customFormPanel-action" class="form-subpanel">
+            <!-- 多个执行程序路径/命令 -->
+            <div class="form-group">
+              <label>触发执行程序/命令行 (可选多个，支持带参数运行)</label>
+              <div id="executablesContainer" class="multi-input-container">
+                <div class="multi-input-row">
+                  <input type="text" class="executable-input" placeholder='例如: PotPlayerMini64.exe "D:\视频.dpl" /autoplay /fullscreen' />
+                  <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
                 </div>
-                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
               </div>
+              <button type="button" class="add-btn" onclick="addExecutableRow()">+ 添加执行程序</button>
+              <span class="help-text">完全支持带任意参数运行 (如: D:\App.exe "D:\file.dpl" /autoplay /fullscreen)</span>
             </div>
-            <button type="button" class="add-btn" onclick="addTriggerTimeRow()">+ 添加具体时间</button>
-          </div>
 
-          <!-- 多个执行程序路径/命令 -->
-          <div class="form-group">
-            <label>触发执行程序/命令行 (可选多个，支持带参数运行)</label>
-            <div id="executablesContainer" class="multi-input-container">
-              <div class="multi-input-row">
-                <input type="text" class="executable-input" placeholder='例如: PotPlayerMini64.exe "D:\视频.dpl" /autoplay /fullscreen' />
-                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+            <!-- 多个显示弹窗内容 -->
+            <div class="form-group">
+              <label>触发显示弹窗消息 (可选多个)</label>
+              <div id="popupsContainer" class="multi-input-container">
+                <div class="multi-input-row">
+                  <input type="text" class="popup-input" placeholder="例如: 提醒内容：请及时处理相关业务" />
+                  <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
+                </div>
               </div>
+              <button type="button" class="add-btn" onclick="addPopupRow()">+ 添加显示弹窗</button>
             </div>
-            <button type="button" class="add-btn" onclick="addExecutableRow()">+ 添加执行程序</button>
-            <span class="help-text">完全支持带任意参数运行 (如: D:\App.exe "D:\file.dpl" /autoplay /fullscreen)</span>
           </div>
 
-          <!-- 多个显示弹窗内容 -->
-          <div class="form-group">
-            <label>触发显示弹窗消息 (可选多个)</label>
-            <div id="popupsContainer" class="multi-input-container">
-              <div class="multi-input-row">
-                <input type="text" class="popup-input" placeholder="例如: 提醒内容：请及时处理相关业务" />
-                <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
-              </div>
-            </div>
-            <button type="button" class="add-btn" onclick="addPopupRow()">+ 添加显示弹窗</button>
-          </div>
-
-          <!-- 置顶配置 -->
-          <div class="form-group">
-            <label class="checkbox-label">
-              <input type="checkbox" id="customAlwaysOnTop" checked />
-              <span>📌 触发时窗口自动浮现并强制最上层置顶 (Top-Most)</span>
-            </label>
-          </div>
-
-          <button type="submit" id="submitCustomBtn" class="primary-btn">
+          <button type="submit" id="submitCustomBtn" class="primary-btn" style="margin-top: 12px;">
             <span>保存自主高级规则</span>
           </button>
         </form>
@@ -350,7 +457,7 @@
             <span id="holidayModalSub" style="font-size:11px; color:#a1a1aa;">可查阅及自定义编辑法定放假与周末补班安排</span>
           </div>
         </div>
-        <button type="button" class="preset-btn reset" onclick="syncHolidays(false)" title="在线在线拉取国务院最新数据">🔄 在线同步</button>
+        <button type="button" class="preset-btn reset" onclick="syncHolidays(false)" title="在线拉取国务院最新数据">🔄 在线同步</button>
       </div>
 
       <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
@@ -377,6 +484,58 @@
       <div class="modal-footer">
         <button type="button" class="modal-btn secondary" onclick="closeHolidayModal(false)">取消</button>
         <button type="button" class="modal-btn primary" onclick="closeHolidayModal(true)">保存并应用</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Date Group Manager Modal Overlay -->
+  <div id="dateGroupModalOverlay" class="modal-overlay">
+    <div class="modal-card date-group-manager-card" style="max-width: 680px; width: 90%;">
+      <div class="modal-header" style="justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="modal-icon-box warning" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🗓️</div>
+          <div>
+            <h3 class="modal-title">自定义日期时间组管理</h3>
+            <span style="font-size:11px; color:#a1a1aa;">设置规则时可关联这些日期组，配置不触发或特例触发</span>
+          </div>
+        </div>
+        <button type="button" class="add-btn" id="showCreateGroupBtn">+ 新建日期时间组</button>
+      </div>
+
+      <div class="modal-body" style="display:flex; flex-direction:column; gap:16px;">
+        <!-- 新建/编辑日期组表单卡片 (默认隐藏) -->
+        <div id="createDateGroupCard" class="sub-card-box" style="display:none; background: rgba(24, 24, 27, 0.9); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px;">
+          <h4 style="font-size:13px; font-weight:600; margin-bottom:10px; color:#38bdf8;">➕ 新增日期时间组</h4>
+          <div style="display:flex; flex-direction:column; gap:10px;">
+            <input type="text" id="dgNameInput" placeholder="组名称 (例如: 公司集中封板期 / 运维窗口)" class="input-styled" />
+            <input type="text" id="dgDescInput" placeholder="备注说明 (可选)" class="input-styled" />
+            
+            <div style="display:flex; gap:8px;">
+              <div class="custom-datetime-wrapper" style="flex:1;">
+                <input type="text" id="dgDateItemInput" placeholder="添加日期/时间/范围 (例: 2026/10/01 或 2026/10/01 ~ 2026/10/07)" class="holiday-date-input" />
+              </div>
+              <button type="button" class="preset-btn" id="addDgDateItemBtn">+ 添加到本组</button>
+            </div>
+
+            <div id="dgDateItemsContainer" class="chips-wrap" style="min-height:42px; padding:8px; background:rgba(0,0,0,0.3); border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
+              <span style="font-size:12px; color:var(--text-muted); align-self:center;">尚未添加日期条目</span>
+            </div>
+
+            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
+              <button type="button" class="modal-btn secondary" id="hideCreateGroupBtn">取消</button>
+              <button type="button" class="modal-btn primary" id="saveDateGroupBtn">保存此日期组</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日期时间组列表 -->
+        <div id="dateGroupsListContainer" class="date-groups-grid">
+          <!-- 动态插入各个日期组卡片 -->
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="modal-btn secondary" id="closeDateGroupModalBtn">关闭</button>
       </div>
     </div>
   </div>

@@ -19,6 +19,17 @@ pub struct RecurrenceRule {
     pub time_of_day: String, // "HH:mm:ss"
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DateGroup {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub dates: Vec<String>, // "YYYY-MM-DD" 或 "YYYY-MM-DD ~ YYYY-MM-DD" 或 "YYYY-MM-DD HH:mm:ss"
+    pub created_at: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HolidayCalendar {
     pub updated_at: String,
@@ -26,7 +37,7 @@ pub struct HolidayCalendar {
     pub workdays: Vec<String>, // 调休补班日期 "YYYY-MM-DD"
 }
 
-// 恢复原始系统计划任务修改器结构（仅单次具体时间目标）
+// 系统计划任务修改器结构
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRule {
     pub id: String,
@@ -36,6 +47,10 @@ pub struct TaskRule {
     pub status: String,      // "PENDING", "SUCCESS", "FAILED"
     pub log_message: Option<String>,
     pub created_at: String,
+    #[serde(default)]
+    pub date_group_ids: Vec<String>,
+    #[serde(default)]
+    pub date_group_mode: String, // "NONE", "EXCLUDE", "FORCE_TRIGGER"
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +59,7 @@ pub struct TimeWindow {
     pub end_time: Option<String>,   // "YYYY-MM-DD HH:mm:ss"
 }
 
-// 高级自主任务引擎（支持丰富的定时循环设置与节假日/调休日历）
+// 高级自主任务引擎（支持丰富的定时循环设置、节假日/调休日历与日期时间组特例规则）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomTaskRule {
     pub id: String,
@@ -65,6 +80,10 @@ pub struct CustomTaskRule {
     pub created_at: String,
     #[serde(default)]
     pub recurrence: Option<RecurrenceRule>,
+    #[serde(default)]
+    pub date_group_ids: Vec<String>,
+    #[serde(default)]
+    pub date_group_mode: String, // "NONE", "EXCLUDE", "FORCE_TRIGGER"
 }
 
 #[derive(Default)]
@@ -72,6 +91,7 @@ pub struct AppState {
     pub tasks: Arc<Mutex<Vec<TaskRule>>>,
     pub custom_tasks: Arc<Mutex<Vec<CustomTaskRule>>>,
     pub holiday_calendar: Arc<Mutex<HolidayCalendar>>,
+    pub date_groups: Arc<Mutex<Vec<DateGroup>>>,
 }
 
 fn get_config_path() -> PathBuf {
@@ -99,6 +119,80 @@ fn get_holiday_config_path() -> PathBuf {
         }
     }
     PathBuf::from("holidays.json")
+}
+
+fn get_date_groups_config_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(dir) = exe_path.parent() {
+            return dir.join("date_groups.json");
+        }
+    }
+    PathBuf::from("date_groups.json")
+}
+
+fn load_date_groups_from_disk() -> Vec<DateGroup> {
+    let path = get_date_groups_config_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(groups) = serde_json::from_str::<Vec<DateGroup>>(&content) {
+                return groups;
+            }
+        }
+    }
+    Vec::new()
+}
+
+fn save_date_groups_to_disk(groups: &[DateGroup]) {
+    let path = get_date_groups_config_path();
+    if let Ok(json) = serde_json::to_string_pretty(groups) {
+        let _ = fs::write(path, json);
+    }
+}
+
+pub fn is_date_in_date_groups(
+    now_date_str: &str, // "YYYY-MM-DD"
+    now_str: &str,      // "YYYY-MM-DD HH:mm:ss"
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+) -> bool {
+    if target_group_ids.is_empty() {
+        return false;
+    }
+
+    let now_date = chrono::NaiveDate::parse_from_str(now_date_str, "%Y-%m-%d")
+        .or_else(|_| chrono::NaiveDate::parse_from_str(now_date_str, "%Y/%m/%d")).ok();
+
+    for group in groups {
+        if target_group_ids.contains(&group.id) {
+            for item in &group.dates {
+                let trimmed = item.trim().replace('/', "-");
+                // Range match e.g. "2026-10-01 ~ 2026-10-07"
+                if trimmed.contains('~') {
+                    let parts: Vec<&str> = trimmed.split('~').collect();
+                    if parts.len() == 2 {
+                        let start_str = parts[0].trim();
+                        let end_str = parts[1].trim();
+                        if let (Some(d), Ok(start), Ok(end)) = (
+                            now_date,
+                            chrono::NaiveDate::parse_from_str(start_str, "%Y-%m-%d"),
+                            chrono::NaiveDate::parse_from_str(end_str, "%Y-%m-%d"),
+                        ) {
+                            if d >= start && d <= end {
+                                return true;
+                            }
+                        }
+                    }
+                } else if trimmed.len() == 10 { // "YYYY-MM-DD"
+                    if trimmed == now_date_str {
+                        return true;
+                    }
+                } else if trimmed == now_str { // "YYYY-MM-DD HH:mm:ss"
+                    return true;
+                }
+            }
+        }
+    }
+    false
 }
 
 fn load_tasks_from_disk() -> Vec<TaskRule> {
@@ -469,7 +563,59 @@ fn save_holiday_calendar(
     Ok(())
 }
 
-// ----------------- Tauri IPC APIs (标准系统计划任务 - 恢复原始单次时间) -----------------
+// ----------------- Tauri IPC APIs (日期时间组) -----------------
+#[tauri::command]
+fn get_date_groups(state: tauri::State<'_, AppState>) -> Vec<DateGroup> {
+    let groups = state.date_groups.lock().unwrap();
+    groups.clone()
+}
+
+#[tauri::command]
+fn save_date_groups(state: tauri::State<'_, AppState>, date_groups: Vec<DateGroup>) -> Result<(), String> {
+    let mut groups = state.date_groups.lock().unwrap();
+    *groups = date_groups.clone();
+    save_date_groups_to_disk(&groups);
+    Ok(())
+}
+
+#[tauri::command]
+fn add_date_group(
+    state: tauri::State<'_, AppState>,
+    name: String,
+    description: Option<String>,
+    dates: Vec<String>,
+) -> Result<DateGroup, String> {
+    if name.trim().is_empty() {
+        return Err("日期时间组名称不能为空".into());
+    }
+
+    let now_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let id = format!("group_{}", Local::now().timestamp_millis());
+
+    let group = DateGroup {
+        id,
+        name: name.trim().to_string(),
+        description: description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
+        dates: dates.into_iter().filter(|s| !s.trim().is_empty()).collect(),
+        created_at: now_str,
+    };
+
+    let mut groups = state.date_groups.lock().unwrap();
+    groups.push(group.clone());
+    save_date_groups_to_disk(&groups);
+
+    Ok(group)
+}
+
+#[tauri::command]
+fn delete_date_group(state: tauri::State<'_, AppState>, id: String) -> Result<(), String> {
+    let mut groups = state.date_groups.lock().unwrap();
+    groups.retain(|g| g.id != id);
+    save_date_groups_to_disk(&groups);
+    Ok(())
+}
+
+// ----------------- Tauri IPC APIs (标准系统计划任务) -----------------
 #[tauri::command]
 fn get_tasks(state: tauri::State<'_, AppState>) -> Vec<TaskRule> {
     let tasks = state.tasks.lock().unwrap();
@@ -482,6 +628,8 @@ fn add_task(
     task_name: String,
     target_time: String,
     action: String,
+    date_group_ids: Option<Vec<String>>,
+    date_group_mode: Option<String>,
 ) -> Result<TaskRule, String> {
     if NaiveDateTime::parse_from_str(&target_time, "%Y-%m-%d %H:%M:%S").is_err() {
         return Err("时间格式必须为 YYYY-MM-DD HH:mm:ss".into());
@@ -498,6 +646,8 @@ fn add_task(
         status: "PENDING".into(),
         log_message: None,
         created_at: now_str,
+        date_group_ids: date_group_ids.unwrap_or_default(),
+        date_group_mode: date_group_mode.unwrap_or_else(|| "NONE".into()),
     };
 
     let mut tasks = state.tasks.lock().unwrap();
@@ -555,6 +705,8 @@ fn add_custom_task(
     popup_messages: Vec<String>,
     always_on_top: bool,
     recurrence: Option<RecurrenceRule>,
+    date_group_ids: Option<Vec<String>>,
+    date_group_mode: Option<String>,
 ) -> Result<CustomTaskRule, String> {
     if name.trim().is_empty() {
         return Err("自定义任务名称不能为空".into());
@@ -577,6 +729,8 @@ fn add_custom_task(
         triggered_history: Vec::new(),
         created_at: now_str,
         recurrence,
+        date_group_ids: date_group_ids.unwrap_or_default(),
+        date_group_mode: date_group_mode.unwrap_or_else(|| "NONE".into()),
     };
 
     let mut tasks = state.custom_tasks.lock().unwrap();
@@ -623,6 +777,7 @@ fn start_background_scheduler(
     tasks_mutex: Arc<Mutex<Vec<TaskRule>>>,
     custom_tasks_mutex: Arc<Mutex<Vec<CustomTaskRule>>>,
     holiday_calendar_mutex: Arc<Mutex<HolidayCalendar>>,
+    date_groups_mutex: Arc<Mutex<Vec<DateGroup>>>,
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -633,8 +788,9 @@ fn start_background_scheduler(
             let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
             let now_date_str = now.format("%Y-%m-%d").to_string();
             let holiday_cal = holiday_calendar_mutex.lock().unwrap().clone();
+            let date_groups = date_groups_mutex.lock().unwrap().clone();
 
-            // 1. 系统计划任务修改器检测（原始精准时间模式）
+            // 1. 系统计划任务修改器检测（支持具体时间与日期时间组特例模式）
             let mut should_save_tasks = false;
             let mut tasks_to_notify = false;
 
@@ -642,8 +798,20 @@ fn start_background_scheduler(
                 let mut tasks = tasks_mutex.lock().unwrap();
                 for task in tasks.iter_mut() {
                     if task.status == "PENDING" {
+                        let is_in_group = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+
+                        // 如果匹配“不触发”特例日期组，则跳过
+                        if task.date_group_mode == "EXCLUDE" && is_in_group {
+                            continue;
+                        }
+
+                        let mut force_triggered = false;
+                        if task.date_group_mode == "FORCE_TRIGGER" && is_in_group {
+                            force_triggered = true;
+                        }
+
                         if let Ok(target) = NaiveDateTime::parse_from_str(&task.target_time, "%Y-%m-%d %H:%M:%S") {
-                            if now_naive >= target {
+                            if now_naive >= target || force_triggered {
                                 let res = execute_schtasks(&task.task_name, &task.action);
                                 match &res {
                                     Ok(msg) => {
@@ -671,7 +839,7 @@ fn start_background_scheduler(
                 let _ = app_handle.emit("tasks_updated", ());
             }
 
-            // 2. 高级自主任务引擎检测（包含多种循环周期与节假日处理）
+            // 2. 高级自主任务引擎检测（包含多种循环周期、节假日与日期时间组特例处理）
             let mut should_save_custom = false;
             let mut custom_updated = false;
 
@@ -715,6 +883,42 @@ fn start_background_scheduler(
 
                     if !task.is_enabled || !in_time_window {
                         continue;
+                    }
+
+                    let is_in_group = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+
+                    // 如果处于“遇此组不触发”例外，跳过该规则
+                    if task.date_group_mode == "EXCLUDE" && is_in_group {
+                        continue;
+                    }
+
+                    // 如果处于“遇此组强制/临时触发”特例
+                    if task.date_group_mode == "FORCE_TRIGGER" && is_in_group {
+                        let time_part = if let Some(ref r) = task.recurrence {
+                            if !r.time_of_day.is_empty() { r.time_of_day.clone() } else { "00:00:00".to_string() }
+                        } else {
+                            "00:00:00".to_string()
+                        };
+                        let force_key = format!("force_group_{}_{}_{}", now_date_str, time_part, task.id);
+
+                        let time_matches = if let Some(ref r) = task.recurrence {
+                            if !r.time_of_day.is_empty() {
+                                let current_time_str = now.format("%H:%M:%S").to_string();
+                                let target_t = if r.time_of_day.len() == 5 { format!("{}:00", r.time_of_day) } else { r.time_of_day.clone() };
+                                current_time_str == target_t
+                            } else {
+                                true
+                            }
+                        } else {
+                            true
+                        };
+
+                        if time_matches && !task.triggered_history.contains(&force_key) {
+                            task.triggered_history.push(force_key);
+                            should_save_custom = true;
+                            custom_updated = true;
+                            trigger_custom_task_actions(&app_handle, task);
+                        }
                     }
 
                     // A. 校验单次不规则触发时刻
@@ -767,10 +971,14 @@ pub fn run() {
     let initial_holiday_cal = load_holiday_calendar_from_disk();
     let holiday_calendar_mutex = Arc::new(Mutex::new(initial_holiday_cal));
 
+    let initial_date_groups = load_date_groups_from_disk();
+    let date_groups_mutex = Arc::new(Mutex::new(initial_date_groups));
+
     let app_state = AppState {
         tasks: tasks_mutex.clone(),
         custom_tasks: custom_tasks_mutex.clone(),
         holiday_calendar: holiday_calendar_mutex.clone(),
+        date_groups: date_groups_mutex.clone(),
     };
 
     tauri::Builder::default()
@@ -788,11 +996,15 @@ pub fn run() {
             execute_custom_task_now,
             get_holiday_calendar,
             fetch_and_update_holidays,
-            save_holiday_calendar
+            save_holiday_calendar,
+            get_date_groups,
+            save_date_groups,
+            add_date_group,
+            delete_date_group
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            start_background_scheduler(handle, tasks_mutex, custom_tasks_mutex, holiday_calendar_mutex);
+            start_background_scheduler(handle, tasks_mutex, custom_tasks_mutex, holiday_calendar_mutex, date_groups_mutex);
 
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

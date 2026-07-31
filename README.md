@@ -53,8 +53,8 @@
 
 ### 4. 🛠️ 自动化 CI/CD 与多架构二进制发布
 * **全自动编译工作流**：集成 GitHub Actions 工作流（`.github/workflows/build.yml`）。
-* **代码变动/标签触发**：仓库代码变更自动编译，提交版本 Tag（如 `v1.0.0`）自动创建 GitHub Release 附带打包文件。
-* **手动编译支持 (`workflow_dispatch`)**：支持在 GitHub Actions 界面一键手动触发编译。
+* **版本标签触发自动构建**：提交版本 Tag（如 `v1.0.0`）自动触发多架构构建并发布 GitHub Release 附带可执行文件。
+* **手动构建支持 (`workflow_dispatch`)**：支持在 GitHub Actions 界面一键手动触发编译（无标签代码推送不会触发自动构建）。
 * **双架构原生支持**：同时构建 **Windows x64** (`x86_64-pc-windows-msvc`) 与 **Windows ARM64** (`aarch64-pc-windows-msvc`) 原生 `.exe` 可执行文件。
 
 ---
@@ -118,9 +118,9 @@ npm run tauri build
 
 本项目包含了完整的 GitHub Actions 自动化编译脚本：
 
-1. **自动构建**：只要向 `main` 或 `master` 分支推送代码，GitHub 将自动启动构建流程。
-2. **手动构建**：在 GitHub 仓库页面点击 **Actions** -> 选择 **Build Windows Executables** -> 点击 **Run workflow** 即可手动触发构建。
-3. **发版 Release**：推送带有 `v` 前缀的 Tag（例如 `git tag v1.0.0 && git push origin v1.0.0`），脚本会自动在 Releases 页面发布编译好的 `TaskModifier-windows-x64.exe` 与 `TaskModifier-windows-arm64.exe`。
+1. **版本标签构建（Tag 触发）**：推送带有 `v` 前缀的版本 Tag（例如 `git tag v1.0.0 && git push origin v1.0.0`），脚本将自动启动构建并在 Releases 页面发布编译好的 `TaskModifier-windows-x64.exe` 与 `TaskModifier-windows-arm64.exe`。
+2. **手动构建 (`workflow_dispatch`)**：在 GitHub 仓库页面点击 **Actions** -> 选择 **Build Windows Executables** -> 点击 **Run workflow** 即可手动触发构建。
+3. **普通推送不触发**：无版本 Tag 的普通代码提交与推送（如修改代码 push 到 main/master）不会触发自动构建，避免消耗资源。
 
 ---
 

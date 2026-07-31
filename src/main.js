@@ -818,9 +818,9 @@ function updateHolidayUI() {
 
   if (statusEl) {
     if (hCount > 0 || wCount > 0) {
-      statusEl.textContent = `已收录 ${hCount}天放假 / ${wCount}天调休`;
+      statusEl.textContent = `(${hCount}天放假/${wCount}天调休)`;
     } else {
-      statusEl.textContent = "未在线同步 (点击配置)";
+      statusEl.textContent = "(点击配置)";
     }
   }
 }
@@ -943,13 +943,205 @@ async function syncHolidays(silent = false) {
   }
 }
 
-window.syncHolidays = syncHolidays;
+// ----------------- 日期时间组与 Form Sub-Tabs 逻辑 -----------------
+let dateGroups = [];
+let editingDateGroupItems = [];
 
-if (syncHolidaysBtn) {
-  syncHolidaysBtn.addEventListener("click", () => openHolidayModal());
+window.switchFormSubTab = function(prefix, tabId) {
+  const container = prefix === 'sys' ? document.getElementById('tab-system') : document.getElementById('tab-custom');
+  if (!container) return;
+
+  const btn = container.querySelector(`.form-subtab-btn[onclick*="'${tabId}'"]`);
+  if (btn) {
+    container.querySelectorAll('.form-subtab-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+
+  container.querySelectorAll('.form-subpanel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById(`${prefix}FormPanel-${tabId}`);
+  if (panel) panel.classList.add('active');
+};
+
+async function fetchDateGroups() {
+  const core = getTauriCore();
+  if (!core) return;
+  try {
+    dateGroups = await core.invoke("get_date_groups");
+    const statusText = document.getElementById("dateGroupStatusText");
+    if (statusText) statusText.textContent = `(${dateGroups.length}个组)`;
+    renderDateGroupSelectors();
+    renderDateGroupsList();
+  } catch (err) {
+    appendLog(`获取日期时间组失败: ${err}`, "error");
+  }
 }
 
-// ----------------- Tab 1: 系统计划任务修改器逻辑 (原始单次时间) -----------------
+function renderDateGroupSelectors() {
+  const sysWrap = document.getElementById("sysDateGroupsContainer");
+  const customWrap = document.getElementById("customDateGroupsContainer");
+
+  const buildHtml = (prefix) => {
+    if (dateGroups.length === 0) {
+      return `<span style="font-size:12px; color:var(--text-muted);">暂无可用的日期时间组 (点击右上角 [🗓️ 日期时间组] 创建)</span>`;
+    }
+    return dateGroups.map(g => `
+      <label class="date-group-chip-select">
+        <input type="checkbox" name="${prefix}DateGroupId" value="${g.id}">
+        <span>🗓️ ${g.name} (${g.dates ? g.dates.length : 0}条日期)</span>
+      </label>
+    `).join("");
+  };
+
+  if (sysWrap) sysWrap.innerHTML = buildHtml("sys");
+  if (customWrap) customWrap.innerHTML = buildHtml("custom");
+}
+
+function renderDateGroupsList() {
+  const listWrap = document.getElementById("dateGroupsListContainer");
+  if (!listWrap) return;
+
+  if (dateGroups.length === 0) {
+    listWrap.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:16px;">暂未设置日期时间组，请点击上方“+ 新建日期时间组”进行创建</div>`;
+    return;
+  }
+
+  listWrap.innerHTML = dateGroups.map(g => `
+    <div class="date-group-item-card">
+      <div class="card-top">
+        <div>
+          <span class="group-name">🗓️ ${g.name}</span>
+          ${g.description ? `<span class="group-desc"> - ${g.description}</span>` : ''}
+        </div>
+        <button type="button" class="icon-btn danger" title="删除该组" onclick="deleteDateGroupItem('${g.id}')">🗑️</button>
+      </div>
+      <div class="chips-wrap" style="padding:6px; background:rgba(0,0,0,0.2); border-radius:6px;">
+        ${(g.dates || []).map(d => `<span class="holiday-date-chip workday" style="font-size:11px;">📅 ${d}</span>`).join("")}
+      </div>
+    </div>
+  `).join("");
+}
+
+window.deleteDateGroupItem = async (id) => {
+  const confirmed = await showCustomConfirm("确定要删除该日期时间组吗？已被关联的任务将失去此组的例外规则。");
+  if (!confirmed) return;
+
+  const core = getTauriCore();
+  if (!core) return;
+
+  try {
+    await core.invoke("delete_date_group", { id });
+    appendLog(`已删除日期时间组 #${id}`, "info");
+    fetchDateGroups();
+  } catch (err) {
+    appendLog(`删除日期时间组失败: ${err}`, "error");
+  }
+};
+
+function openDateGroupModal() {
+  fetchDateGroups();
+  const modal = document.getElementById("dateGroupModalOverlay");
+  if (modal) modal.classList.add("active");
+}
+
+function closeDateGroupModal() {
+  const modal = document.getElementById("dateGroupModalOverlay");
+  if (modal) modal.classList.remove("active");
+}
+
+function showCreateDateGroupForm() {
+  editingDateGroupItems = [];
+  document.getElementById("dgNameInput").value = "";
+  document.getElementById("dgDescInput").value = "";
+  document.getElementById("dgDateItemInput").value = "";
+  renderNewDgDateItems();
+  document.getElementById("createDateGroupCard").style.display = "block";
+}
+
+function hideCreateDateGroupForm() {
+  document.getElementById("createDateGroupCard").style.display = "none";
+}
+
+function addDateItemToGroup() {
+  const input = document.getElementById("dgDateItemInput");
+  const val = input ? input.value.trim() : "";
+  if (!val) {
+    showCustomAlert("请输入日期 (如: 2026/10/01 或范围: 2026/10/01 ~ 2026/10/07)");
+    return;
+  }
+  if (!editingDateGroupItems.includes(val)) {
+    editingDateGroupItems.push(val);
+    input.value = "";
+    renderNewDgDateItems();
+  }
+}
+
+function renderNewDgDateItems() {
+  const wrap = document.getElementById("dgDateItemsContainer");
+  if (!wrap) return;
+  if (editingDateGroupItems.length === 0) {
+    wrap.innerHTML = `<span style="font-size:12px; color:var(--text-muted); align-self:center;">尚未添加日期条目</span>`;
+    return;
+  }
+  wrap.innerHTML = editingDateGroupItems.map((item, idx) => `
+    <div class="holiday-date-chip workday" style="font-size:11px;">
+      <span>📅 ${item}</span>
+      <span class="remove-chip-btn" onclick="removeNewDgDateItem(${idx})">✕</span>
+    </div>
+  `).join("");
+}
+
+window.removeNewDgDateItem = (idx) => {
+  editingDateGroupItems.splice(idx, 1);
+  renderNewDgDateItems();
+};
+
+async function saveNewDateGroup() {
+  const name = document.getElementById("dgNameInput").value.trim();
+  const description = document.getElementById("dgDescInput").value.trim();
+  if (!name) {
+    showCustomAlert("请输入日期时间组名称");
+    return;
+  }
+  if (editingDateGroupItems.length === 0) {
+    showCustomAlert("请至少为此组添加一条日期或时间范围");
+    return;
+  }
+
+  const core = getTauriCore();
+  if (!core) return;
+
+  try {
+    await core.invoke("add_date_group", {
+      name,
+      description: description || null,
+      dates: editingDateGroupItems
+    });
+    appendLog(`已成功创建日期时间组: [${name}]`, "success");
+    hideCreateDateGroupForm();
+    fetchDateGroups();
+  } catch (err) {
+    appendLog(`创建日期时间组失败: ${err}`, "error");
+    showCustomAlert(`错误: ${err}`);
+  }
+}
+
+function getGroupBadgeHtml(groupIds, mode) {
+  if (!groupIds || groupIds.length === 0 || !mode || mode === "NONE") return "";
+  const groupNames = groupIds.map(id => {
+    const g = dateGroups.find(dg => dg.id === id);
+    return g ? g.name : id;
+  }).join(", ");
+
+  if (mode === "EXCLUDE") {
+    return `<div class="date-group-badge exclude">🚫 遇例外组 [${groupNames}] 跳过不触发</div>`;
+  }
+  if (mode === "FORCE_TRIGGER") {
+    return `<div class="date-group-badge force">⚡ 遇特例组 [${groupNames}] 强制/临时触发</div>`;
+  }
+  return "";
+}
+
+// ----------------- Tab 1: 系统计划任务修改器逻辑 -----------------
 async function fetchTasks() {
   const core = getTauriCore();
   if (!core) {
@@ -981,6 +1173,10 @@ async function handleAddTask(e) {
   const formattedTime = formatDatetimeString(dtVal);
   const selectedAction = document.querySelector('input[name="targetAction"]:checked').value;
 
+  const checkedGroupCbs = document.querySelectorAll('input[name="sysDateGroupId"]:checked');
+  const dateGroupIds = Array.from(checkedGroupCbs).map(cb => cb.value);
+  const dateGroupMode = document.querySelector('input[name="sysDateGroupMode"]:checked')?.value || "NONE";
+
   const core = getTauriCore();
   if (!core) return;
 
@@ -988,7 +1184,9 @@ async function handleAddTask(e) {
     const newTask = await core.invoke("add_task", {
       taskName: taskName,
       targetTime: formattedTime,
-      action: selectedAction
+      action: selectedAction,
+      dateGroupIds,
+      dateGroupMode
     });
 
     appendLog(`已成功创建系统任务修改规则: [${taskName}] 将在 ${formattedTime} 修改为 ${selectedAction}`, "success");
@@ -1068,6 +1266,7 @@ function renderTaskList() {
     const isPending = task.status === "PENDING";
     const statusText = task.status === "PENDING" ? "⏳ 等待到期" :
                        task.status === "SUCCESS" ? "✅ 执行成功" : "❌ 执行失败";
+    const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode);
 
     return `
       <div class="task-item" data-id="${task.id}">
@@ -1081,6 +1280,7 @@ function renderTaskList() {
             <span>目标时间: ${task.target_time}</span>
             ${isPending ? `<span class="countdown" data-target="${task.target_time}">⏳ 倒计时: ${calculateCountdown(task.target_time)}</span>` : ''}
           </div>
+          ${groupBadge}
           ${task.log_message ? `<div style="font-size:11px; color:${task.status === 'SUCCESS' ? '#34d399' : '#fb7185'}; margin-top:2px;">信息: ${task.log_message}</div>` : ''}
         </div>
         <div class="task-actions">
@@ -1092,7 +1292,7 @@ function renderTaskList() {
   }).join("");
 }
 
-// ----------------- Tab 2: 高级自主任务引擎逻辑 (包含下次触发计算与倒计时) -----------------
+// ----------------- Tab 2: 高级自主任务引擎逻辑 -----------------
 function getNextTriggerDateForCustomTask(task) {
   const candidates = [];
   const now = new Date();
@@ -1213,8 +1413,13 @@ async function handleAddCustomTask(e) {
     .map(input => formatDatetimeString(input.value))
     .filter(val => val.length > 0);
 
-  if (!recurrence && triggerTimes.length === 0) {
-    showCustomAlert("请设置定时循环周期（如每天、每周、工作日）或输入具体不规则触发时间");
+  // 收集选中的日期组及特例模式
+  const checkedGroupCbs = document.querySelectorAll('input[name="customDateGroupId"]:checked');
+  const dateGroupIds = Array.from(checkedGroupCbs).map(cb => cb.value);
+  const dateGroupMode = document.querySelector('input[name="customDateGroupMode"]:checked')?.value || "NONE";
+
+  if (!recurrence && triggerTimes.length === 0 && dateGroupMode !== "FORCE_TRIGGER") {
+    showCustomAlert("请设置定时循环周期（如每天、每周、工作日）、具体不规则触发时间或特例强制触发规则");
     return;
   }
 
@@ -1248,7 +1453,9 @@ async function handleAddCustomTask(e) {
       executables,
       popupMessages,
       alwaysOnTop,
-      recurrence
+      recurrence,
+      dateGroupIds,
+      dateGroupMode
     });
 
     const recurLabel = formatRecurrenceText(recurrence);
@@ -1334,6 +1541,7 @@ function renderCustomTaskList() {
     const nextTriggerDate = getNextTriggerDateForCustomTask(task);
     const nextTriggerStr = nextTriggerDate ? formatDatetimeString(nextTriggerDate) : null;
     const countdownText = nextTriggerStr ? calculateCountdown(nextTriggerStr) : null;
+    const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode);
 
     return `
       <div class="task-item" data-id="${task.id}">
@@ -1349,12 +1557,13 @@ function renderCustomTaskList() {
           </div>
 
           <div style="font-size:11px; color:#71717a; word-break:break-all;">${timeWindowStr}</div>
+          ${groupBadge}
 
           <div class="custom-tags-group">
             ${recurText ? `<span class="custom-tag time">${recurText}</span>` : ''}
-            ${task.trigger_datetimes.map(t => `<span class="custom-tag time">⏰ ${t}</span>`).join("")}
-            ${task.executables.map(e => `<span class="custom-tag exe">🚀 ${e}</span>`).join("")}
-            ${task.popup_messages.map(m => `<span class="custom-tag msg">💬 ${m}</span>`).join("")}
+            ${(task.trigger_datetimes || []).map(t => `<span class="custom-tag time">⏰ ${t}</span>`).join("")}
+            ${(task.executables || []).map(e => `<span class="custom-tag exe">🚀 ${e}</span>`).join("")}
+            ${(task.popup_messages || []).map(m => `<span class="custom-tag msg">💬 ${m}</span>`).join("")}
           </div>
         </div>
 
@@ -1412,6 +1621,21 @@ window.addEventListener("DOMContentLoaded", () => {
     });
   });
 
+  // 日期时间组模态框事件
+  const openDgBtn = document.getElementById("openDateGroupModalBtn");
+  const closeDgBtn = document.getElementById("closeDateGroupModalBtn");
+  const showCreateDgBtn = document.getElementById("showCreateGroupBtn");
+  const hideCreateDgBtn = document.getElementById("hideCreateGroupBtn");
+  const addDgDateBtn = document.getElementById("addDgDateItemBtn");
+  const saveDgBtn = document.getElementById("saveDateGroupBtn");
+
+  if (openDgBtn) openDgBtn.addEventListener("click", openDateGroupModal);
+  if (closeDgBtn) closeDgBtn.addEventListener("click", closeDateGroupModal);
+  if (showCreateDgBtn) showCreateDgBtn.addEventListener("click", showCreateDateGroupForm);
+  if (hideCreateDgBtn) hideCreateDgBtn.addEventListener("click", hideCreateDateGroupForm);
+  if (addDgDateBtn) addDgDateBtn.addEventListener("click", addDateItemToGroup);
+  if (saveDgBtn) saveDgBtn.addEventListener("click", saveNewDateGroup);
+
   addRuleForm.addEventListener("submit", handleAddTask);
   addCustomRuleForm.addEventListener("submit", handleAddCustomTask);
 
@@ -1420,6 +1644,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   setTimeout(() => {
     fetchHolidayCalendar();
+    fetchDateGroups();
     fetchTasks();
     fetchCustomTasks();
   }, 300);
