@@ -13,6 +13,9 @@ const getTauriCore = () => {
 
 let tasks = [];
 let customTasks = [];
+let currentHolidayCal = { holidays: [], workdays: [], updated_at: "" };
+let editingHolidayCal = { holidays: [], workdays: [], updated_at: "" };
+let activeHolidayTab = "holidays";
 
 // DOM Elements
 const addRuleForm = document.getElementById("addRuleForm");
@@ -34,6 +37,15 @@ const executablesContainer = document.getElementById("executablesContainer");
 const popupsContainer = document.getElementById("popupsContainer");
 const customTaskListContainer = document.getElementById("customTaskList");
 const customTaskCountBadge = document.getElementById("customTaskCount");
+
+// Holiday Modal Elements
+const holidayModalOverlay = document.getElementById("holidayModalOverlay");
+const holidaysCountEl = document.getElementById("holidaysCount");
+const workdaysCountEl = document.getElementById("workdaysCount");
+const holidayDatesContainer = document.getElementById("holidayDatesContainer");
+const newHolidayDateInput = document.getElementById("newHolidayDateInput");
+const tabHolidaysBtn = document.getElementById("tabHolidaysBtn");
+const tabWorkdaysBtn = document.getElementById("tabWorkdaysBtn");
 
 // Custom Modal Confirm/Alert Elements
 const modalOverlay = document.getElementById("customModalOverlay");
@@ -114,10 +126,29 @@ function showCustomAlert(message, title = "提示信息") {
   });
 }
 
+function getFormattedNowDateTime() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  const hours = String(now.getHours()).padStart(2, '0');
+  const mins = String(now.getMinutes()).padStart(2, '0');
+  const secs = String(now.getSeconds()).padStart(2, '0');
+  return `${year}/${month}/${day} ${hours}:${mins}:${secs}`;
+}
+
+function getFormattedNowTime() {
+  const now = new Date();
+  const hours = String(now.getHours()).padStart(2, '0');
+  const mins = String(now.getMinutes()).padStart(2, '0');
+  const secs = String(now.getSeconds()).padStart(2, '0');
+  return `${hours}:${mins}:${secs}`;
+}
+
 // ----------------- 置顶触发弹窗系统 -----------------
 function showTopmostTriggerAlert({ task_name, popup_messages, always_on_top }) {
   topmostTitle.textContent = `🔔 任务触发：${task_name}`;
-  topmostSubtitle.textContent = `触发时间: ${new Date().toLocaleString()} ${always_on_top ? '(已强制置顶显示)' : ''}`;
+  topmostSubtitle.textContent = `触发时间: ${getFormattedNowDateTime()} ${always_on_top ? '(已强制置顶显示)' : ''}`;
 
   if (!popup_messages || popup_messages.length === 0) {
     topmostPopupsList.innerHTML = `<div class="popup-msg-item">任务排期时间已到，已自动触发执行命令！</div>`;
@@ -134,6 +165,397 @@ topmostCloseBtn.addEventListener("click", () => {
   topmostModalOverlay.classList.remove("active");
 });
 
+// ----------------- 高级零依赖 Custom DateTime Picker 组件 -----------------
+class CustomDateTimePicker {
+  constructor(containerWrapper, options = {}) {
+    this.wrapper = containerWrapper;
+    this.input = this.wrapper.querySelector("input");
+    if (!this.input) return;
+
+    this.dateOnly = options.dateOnly || false;
+    this.placeholder = options.placeholder || (this.dateOnly ? "YYYY/MM/DD" : "YYYY/MM/DD --:--:--");
+
+    this.input.classList.add("custom-datetime-input");
+    this.input.placeholder = this.placeholder;
+
+    // Create right-side icon
+    let iconBtn = this.wrapper.querySelector(".custom-datetime-icon");
+    if (!iconBtn) {
+      iconBtn = document.createElement("button");
+      iconBtn.type = "button";
+      iconBtn.className = "custom-datetime-icon";
+      iconBtn.innerHTML = "📅";
+      iconBtn.title = "点击选择日期与时间";
+      this.wrapper.appendChild(iconBtn);
+    }
+    this.iconBtn = iconBtn;
+
+    // Create dropdown panel
+    let panel = this.wrapper.querySelector(".datetime-picker-panel");
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.className = "datetime-picker-panel";
+      this.wrapper.appendChild(panel);
+    }
+    this.panel = panel;
+
+    const initialDate = this.parseInputValue() || new Date();
+    this.viewYear = initialDate.getFullYear();
+    this.viewMonth = initialDate.getMonth();
+    this.selectedYear = initialDate.getFullYear();
+    this.selectedMonth = initialDate.getMonth();
+    this.selectedDay = initialDate.getDate();
+
+    this.hours = initialDate.getHours();
+    this.minutes = initialDate.getMinutes();
+    this.seconds = initialDate.getSeconds();
+
+    this.bindEvents();
+  }
+
+  parseInputValue() {
+    if (!this.input || !this.input.value) return null;
+    const val = this.input.value.trim().replace(/\//g, "-");
+    const d = new Date(val.includes("T") ? val : val.replace(" ", "T"));
+    return isNaN(d.getTime()) ? null : d;
+  }
+
+  bindEvents() {
+    this.input.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.open();
+    });
+
+    this.iconBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      this.toggle();
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!this.wrapper.contains(e.target)) {
+        this.close();
+      }
+    });
+
+    this.input.addEventListener("input", (e) => {
+      if (e.inputType && e.inputType.startsWith("delete")) return;
+      const formatted = this.formatDigitsProgressively(this.input.value);
+      if (formatted) {
+        this.input.value = formatted;
+      }
+    });
+
+    this.input.addEventListener("blur", () => {
+      if (this.input.value) {
+        const raw = this.input.value.replace(/\D/g, "");
+        if (raw.length === 8 && !this.dateOnly) {
+          const y = raw.substring(0, 4);
+          const m = raw.substring(4, 6);
+          const d = raw.substring(6, 8);
+          this.input.value = `${y}/${m}/${d} 09:00:00`;
+        } else {
+          this.input.value = this.formatDigitsProgressively(this.input.value);
+        }
+      }
+    });
+  }
+
+  formatDigitsProgressively(val) {
+    if (!val) return "";
+    const raw = val.replace(/\D/g, "");
+    if (raw.length === 0) return "";
+
+    let res = "";
+
+    // 1. 年份 (1..4 位)
+    if (raw.length <= 4) {
+      return raw;
+    }
+    const year = raw.substring(0, 4);
+    res += year + "/";
+
+    let remaining = raw.substring(4);
+
+    // 2. 月份 (01..12)：首位 > 1 自动补 0 (如 5 -> 05)
+    let month = "";
+    const m1 = remaining.charAt(0);
+    if (m1 > '1') {
+      month = "0" + m1;
+      remaining = remaining.substring(1);
+    } else if (remaining.length >= 2) {
+      const mNum = parseInt(remaining.substring(0, 2), 10);
+      if (mNum === 0) month = "01";
+      else if (mNum > 12) month = "12";
+      else month = String(mNum).padStart(2, '0');
+      remaining = remaining.substring(2);
+    } else {
+      return res + remaining;
+    }
+    res += month + "/";
+
+    if (remaining.length === 0) return res;
+
+    // 3. 日期 (01..31)：首位 > 3 自动补 0 (如 6 -> 06)
+    let day = "";
+    const d1 = remaining.charAt(0);
+    if (d1 > '3') {
+      day = "0" + d1;
+      remaining = remaining.substring(1);
+    } else if (remaining.length >= 2) {
+      const dNum = parseInt(remaining.substring(0, 2), 10);
+      if (dNum === 0) day = "01";
+      else if (dNum > 31) day = "31";
+      else day = String(dNum).padStart(2, '0');
+      remaining = remaining.substring(2);
+    } else {
+      return res + remaining;
+    }
+    res += day;
+
+    if (this.dateOnly || remaining.length === 0) return res;
+
+    res += " ";
+
+    // 4. 小时 (00..23)：首位 > 2 自动补 0 (如 8 -> 08)
+    let hour = "";
+    const h1 = remaining.charAt(0);
+    if (h1 > '2') {
+      hour = "0" + h1;
+      remaining = remaining.substring(1);
+    } else if (remaining.length >= 2) {
+      const hNum = parseInt(remaining.substring(0, 2), 10);
+      if (hNum > 23) hour = "23";
+      else hour = String(hNum).padStart(2, '0');
+      remaining = remaining.substring(2);
+    } else {
+      return res + remaining;
+    }
+    res += hour + ":";
+
+    if (remaining.length === 0) return res;
+
+    // 5. 分钟 (00..59)：首位 > 5 自动补 0
+    let min = "";
+    const min1 = remaining.charAt(0);
+    if (min1 > '5') {
+      min = "0" + min1;
+      remaining = remaining.substring(1);
+    } else if (remaining.length >= 2) {
+      const minNum = parseInt(remaining.substring(0, 2), 10);
+      if (minNum > 59) min = "59";
+      else min = String(minNum).padStart(2, '0');
+      remaining = remaining.substring(2);
+    } else {
+      return res + remaining;
+    }
+    res += min + ":";
+
+    if (remaining.length === 0) return res;
+
+    // 6. 秒钟 (00..59)：首位 > 5 自动补 0
+    let sec = "";
+    const sec1 = remaining.charAt(0);
+    if (sec1 > '5') {
+      sec = "0" + sec1;
+      remaining = remaining.substring(1);
+    } else if (remaining.length >= 2) {
+      const secNum = parseInt(remaining.substring(0, 2), 10);
+      if (secNum > 59) sec = "59";
+      else sec = String(secNum).padStart(2, '0');
+      remaining = remaining.substring(2);
+    } else {
+      return res + remaining;
+    }
+    res += sec;
+
+    return res;
+  }
+
+  formatRawDigits(val) {
+    return this.formatDigitsProgressively(val);
+  }
+
+  toggle() {
+    if (this.panel.classList.contains("active")) this.close();
+    else this.open();
+  }
+
+  open() {
+    document.querySelectorAll(".datetime-picker-panel.active").forEach(p => {
+      if (p !== this.panel) p.classList.remove("active");
+    });
+
+    const curr = this.parseInputValue() || new Date();
+    this.viewYear = curr.getFullYear();
+    this.viewMonth = curr.getMonth();
+    this.selectedYear = curr.getFullYear();
+    this.selectedMonth = curr.getMonth();
+    this.selectedDay = curr.getDate();
+    this.hours = curr.getHours();
+    this.minutes = curr.getMinutes();
+    this.seconds = curr.getSeconds();
+
+    this.renderPanel();
+    this.panel.classList.add("active");
+  }
+
+  close() {
+    this.panel.classList.remove("active");
+  }
+
+  renderPanel() {
+    const monthNames = ["01月", "02月", "03月", "04月", "05月", "06月", "07月", "08月", "09月", "10月", "11月", "12月"];
+    
+    const firstDayIndex = new Date(this.viewYear, this.viewMonth, 1).getDay();
+    const daysInMonth = new Date(this.viewYear, this.viewMonth + 1, 0).getDate();
+    const daysInPrevMonth = new Date(this.viewYear, this.viewMonth, 0).getDate();
+
+    let gridHtml = `
+      <div class="picker-week-day">日</div>
+      <div class="picker-week-day">一</div>
+      <div class="picker-week-day">二</div>
+      <div class="picker-week-day">三</div>
+      <div class="picker-week-day">四</div>
+      <div class="picker-week-day">五</div>
+      <div class="picker-week-day">六</div>
+    `;
+
+    for (let i = firstDayIndex - 1; i >= 0; i--) {
+      const prevD = daysInPrevMonth - i;
+      gridHtml += `<div class="picker-day-cell other-month">${prevD}</div>`;
+    }
+
+    const today = new Date();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const isToday = (today.getFullYear() === this.viewYear && today.getMonth() === this.viewMonth && today.getDate() === d);
+      const isSelected = (this.selectedYear === this.viewYear && this.selectedMonth === this.viewMonth && this.selectedDay === d);
+      
+      let classes = "picker-day-cell";
+      if (isToday) classes += " today";
+      if (isSelected) classes += " selected";
+
+      gridHtml += `<div class="${classes}" data-day="${d}">${d}</div>`;
+    }
+
+    const pad = (n) => String(n).padStart(2, '0');
+
+    this.panel.innerHTML = `
+      <div class="picker-header">
+        <button type="button" class="picker-nav-btn prev-month">◀</button>
+        <span class="picker-header-title">${this.viewYear}年 ${monthNames[this.viewMonth]}</span>
+        <button type="button" class="picker-nav-btn next-month">▶</button>
+      </div>
+
+      <div class="picker-calendar-grid">
+        ${gridHtml}
+      </div>
+
+      ${!this.dateOnly ? `
+        <div class="picker-time-bar">
+          <span style="font-size:11px; color:#a1a1aa; font-weight:500;">时刻 (HH:mm:ss):</span>
+          <div class="picker-time-inputs">
+            <input type="text" maxlength="2" class="picker-time-num hour-num" value="${pad(this.hours)}" /> :
+            <input type="text" maxlength="2" class="picker-time-num min-num" value="${pad(this.minutes)}" /> :
+            <input type="text" maxlength="2" class="picker-time-num sec-num" value="${pad(this.seconds)}" />
+          </div>
+        </div>
+      ` : ''}
+
+      <div class="picker-footer">
+        <button type="button" class="picker-btn-now">设为此刻</button>
+        <button type="button" class="picker-btn-confirm">确认选择</button>
+      </div>
+    `;
+
+    this.panel.querySelector(".prev-month").onclick = (e) => {
+      e.stopPropagation();
+      this.viewMonth--;
+      if (this.viewMonth < 0) {
+        this.viewMonth = 11;
+        this.viewYear--;
+      }
+      this.renderPanel();
+    };
+
+    this.panel.querySelector(".next-month").onclick = (e) => {
+      e.stopPropagation();
+      this.viewMonth++;
+      if (this.viewMonth > 11) {
+        this.viewMonth = 0;
+        this.viewYear++;
+      }
+      this.renderPanel();
+    };
+
+    this.panel.querySelectorAll(".picker-day-cell:not(.other-month)").forEach(cell => {
+      cell.onclick = (e) => {
+        e.stopPropagation();
+        this.selectedYear = this.viewYear;
+        this.selectedMonth = this.viewMonth;
+        this.selectedDay = parseInt(cell.getAttribute("data-day"));
+        this.renderPanel();
+      };
+    });
+
+    if (!this.dateOnly) {
+      const hInput = this.panel.querySelector(".hour-num");
+      const mInput = this.panel.querySelector(".min-num");
+      const sInput = this.panel.querySelector(".sec-num");
+
+      hInput.onchange = () => { this.hours = Math.min(23, Math.max(0, parseInt(hInput.value || "0"))); };
+      mInput.onchange = () => { this.minutes = Math.min(59, Math.max(0, parseInt(mInput.value || "0"))); };
+      sInput.onchange = () => { this.seconds = Math.min(59, Math.max(0, parseInt(sInput.value || "0"))); };
+    }
+
+    this.panel.querySelector(".picker-btn-now").onclick = (e) => {
+      e.stopPropagation();
+      const now = new Date();
+      this.viewYear = now.getFullYear();
+      this.viewMonth = now.getMonth();
+      this.selectedYear = now.getFullYear();
+      this.selectedMonth = now.getMonth();
+      this.selectedDay = now.getDate();
+      this.hours = now.getHours();
+      this.minutes = now.getMinutes();
+      this.seconds = now.getSeconds();
+      this.applySelection();
+      this.close();
+    };
+
+    this.panel.querySelector(".picker-btn-confirm").onclick = (e) => {
+      e.stopPropagation();
+      this.applySelection();
+      this.close();
+    };
+  }
+
+  applySelection() {
+    const pad = (n) => String(n).padStart(2, '0');
+    const y = this.selectedYear;
+    const m = pad(this.selectedMonth + 1);
+    const d = pad(this.selectedDay);
+
+    if (this.dateOnly) {
+      this.input.value = `${y}/${m}/${d}`;
+    } else {
+      const hh = pad(this.hours);
+      const mm = pad(this.minutes);
+      const ss = pad(this.seconds);
+      this.input.value = `${y}/${m}/${d} ${hh}:${mm}:${ss}`;
+    }
+  }
+}
+
+window.initCustomDatePickers = function(container = document) {
+  container.querySelectorAll(".custom-datetime-wrapper").forEach(wrapper => {
+    if (wrapper.dataset.pickerInitialized) return;
+    wrapper.dataset.pickerInitialized = "true";
+    const input = wrapper.querySelector("input");
+    const isDateOnly = input && (input.id === "newHolidayDateInput" || input.classList.contains("holiday-date-input"));
+    new CustomDateTimePicker(wrapper, { dateOnly: isDateOnly });
+  });
+};
+
 // ----------------- 日期与字符串工具 -----------------
 function formatToDatetimeInputValue(dateObj) {
   const year = dateObj.getFullYear();
@@ -142,12 +564,12 @@ function formatToDatetimeInputValue(dateObj) {
   const hours = String(dateObj.getHours()).padStart(2, '0');
   const mins = String(dateObj.getMinutes()).padStart(2, '0');
   const secs = String(dateObj.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day}T${hours}:${mins}:${secs}`;
+  return `${year}/${month}/${day} ${hours}:${mins}:${secs}`;
 }
 
 function formatDatetimeString(dateStr) {
   if (!dateStr) return "";
-  const date = new Date(dateStr);
+  const date = new Date(dateStr.replace(/\//g, "-").replace("T", " "));
   if (isNaN(date.getTime())) return dateStr;
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, '0');
@@ -155,7 +577,7 @@ function formatDatetimeString(dateStr) {
   const hours = String(date.getHours()).padStart(2, '0');
   const mins = String(date.getMinutes()).padStart(2, '0');
   const secs = String(date.getSeconds()).padStart(2, '0');
-  return `${year}-${month}-${day} ${hours}:${mins}:${secs}`;
+  return `${year}/${month}/${day} ${hours}:${mins}:${secs}`;
 }
 
 window.resetToNow = () => {
@@ -166,7 +588,7 @@ window.resetToNow = () => {
 window.setPresetOffset = (minutes) => {
   let baseDate = new Date();
   if (targetDatetimeInput.value) {
-    const currentVal = targetDatetimeInput.value.replace('T', ' ').replace(/-/g, '/');
+    const currentVal = targetDatetimeInput.value.replace(/\//g, '-').replace('T', ' ');
     const parsed = new Date(currentVal);
     if (!isNaN(parsed.getTime())) {
       baseDate = parsed;
@@ -181,7 +603,7 @@ window.setPresetOffset = (minutes) => {
 function appendLog(message, type = "info") {
   const entry = document.createElement("div");
   entry.className = `log-entry ${type}`;
-  const nowStr = new Date().toLocaleTimeString();
+  const nowStr = getFormattedNowTime();
   entry.textContent = `[${nowStr}] ${message}`;
   logTerminal.appendChild(entry);
   logTerminal.scrollTop = logTerminal.scrollHeight;
@@ -207,24 +629,31 @@ window.addEnableWindowRow = () => {
   row.className = "multi-window-row";
   row.innerHTML = `
     <div class="window-inputs-group">
-      <input type="datetime-local" class="window-start-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后生效启用" placeholder="开启时间" />
+      <div class="custom-datetime-wrapper">
+        <input type="text" class="window-start-input" title="在此时间点后生效启用" placeholder="YYYY/MM/DD --:--:--" />
+      </div>
       <span class="window-separator">⬇ 启用至 ⬇</span>
-      <input type="datetime-local" class="window-end-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后失效禁用" placeholder="截止时间" />
+      <div class="custom-datetime-wrapper">
+        <input type="text" class="window-end-input" title="在此时间点后失效禁用" placeholder="YYYY/MM/DD --:--:--" />
+      </div>
     </div>
     <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
   `;
   enableWindowsContainer.appendChild(row);
+  initCustomDatePickers(row);
 };
 
 window.addTriggerTimeRow = () => {
   const row = document.createElement("div");
   row.className = "multi-input-row";
-  const defaultVal = formatToDatetimeInputValue(new Date(Date.now() + 5 * 60000));
   row.innerHTML = `
-    <input type="datetime-local" class="trigger-time-input" value="${defaultVal}" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" />
+    <div class="custom-datetime-wrapper">
+      <input type="text" class="trigger-time-input" placeholder="YYYY/MM/DD --:--:--" />
+    </div>
     <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
   `;
   triggerTimesContainer.appendChild(row);
+  initCustomDatePickers(row);
 };
 
 window.addExecutableRow = () => {
@@ -263,7 +692,7 @@ window.toggleRecurrenceUI = function(prefix = 'custom') {
   const selectedMode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
 
   ['ONCE', 'WEEKLY', 'MONTHLY'].forEach(mode => {
-    const panel = document.getElementById(`${prefix}Panel${mode}`);
+    const panel = document.getElementById(`${prefix}Panel${selectedMode}`);
     if (panel) panel.classList.remove('active');
   });
 
@@ -348,7 +777,7 @@ function formatRecurrenceText(rule) {
   return `🔁 循环模式(${rule.mode}) ${timeStr}`;
 }
 
-// ----------------- 节假日同步逻辑 -----------------
+// ----------------- 节假日同步与管理面板逻辑 -----------------
 async function fetchHolidayCalendar() {
   const core = getTauriCore();
   const statusEl = document.getElementById("holidayStatusText");
@@ -359,16 +788,122 @@ async function fetchHolidayCalendar() {
 
   try {
     const cal = await core.invoke("get_holiday_calendar");
-    if (cal && (cal.holidays.length > 0 || cal.workdays.length > 0)) {
-      if (statusEl) statusEl.textContent = `已收录 ${cal.holidays.length}天放假 / ${cal.workdays.length}天调休`;
-    } else {
-      if (statusEl) statusEl.textContent = "未在线同步 (点击同步)";
-      syncHolidays(true);
+    if (cal) {
+      currentHolidayCal = cal;
+      updateHolidayUI();
     }
   } catch (err) {
     if (statusEl) statusEl.textContent = "获取失败";
   }
 }
+
+function updateHolidayUI() {
+  const statusEl = document.getElementById("holidayStatusText");
+  const hCount = currentHolidayCal.holidays ? currentHolidayCal.holidays.length : 0;
+  const wCount = currentHolidayCal.workdays ? currentHolidayCal.workdays.length : 0;
+
+  if (statusEl) {
+    if (hCount > 0 || wCount > 0) {
+      statusEl.textContent = `已收录 ${hCount}天放假 / ${wCount}天调休`;
+    } else {
+      statusEl.textContent = "未在线同步 (点击配置)";
+    }
+  }
+}
+
+function renderHolidayModalUI() {
+  const hCount = editingHolidayCal.holidays ? editingHolidayCal.holidays.length : 0;
+  const wCount = editingHolidayCal.workdays ? editingHolidayCal.workdays.length : 0;
+
+  if (holidaysCountEl) holidaysCountEl.textContent = hCount;
+  if (workdaysCountEl) workdaysCountEl.textContent = wCount;
+
+  renderHolidayDatesList();
+}
+
+function renderHolidayDatesList() {
+  if (!holidayDatesContainer) return;
+  const list = activeHolidayTab === "holidays" ? (editingHolidayCal.holidays || []) : (editingHolidayCal.workdays || []);
+  const chipClass = activeHolidayTab === "holidays" ? "holiday" : "workday";
+
+  if (list.length === 0) {
+    holidayDatesContainer.innerHTML = `<div style="font-size:12px; color:#71717a; padding:10px; width:100%; text-align:center;">暂无记录的${activeHolidayTab === "holidays" ? '放假' : '调休'}日期 (默认为空)</div>`;
+    return;
+  }
+
+  holidayDatesContainer.innerHTML = list.map(d => `
+    <div class="holiday-date-chip ${chipClass}">
+      <span>📅 ${d}</span>
+      <span class="remove-chip-btn" title="删除该日期" onclick="removeHolidayDate('${activeHolidayTab}', '${d}')">✕</span>
+    </div>
+  `).join("");
+}
+
+window.openHolidayModal = function() {
+  fetchHolidayCalendar();
+  editingHolidayCal = JSON.parse(JSON.stringify(currentHolidayCal));
+  renderHolidayModalUI();
+  if (holidayModalOverlay) holidayModalOverlay.classList.add("active");
+};
+
+window.closeHolidayModal = async function(shouldSave = false) {
+  if (shouldSave) {
+    currentHolidayCal = JSON.parse(JSON.stringify(editingHolidayCal));
+    updateHolidayUI();
+    const core = getTauriCore();
+    if (core) {
+      try {
+        await core.invoke("save_holiday_calendar", { calendar: currentHolidayCal });
+        appendLog("已成功应用并保存本地节假日与调休日历！", "success");
+        renderCustomTaskList();
+      } catch (err) {
+        appendLog(`保存日历失败: ${err}`, "error");
+      }
+    }
+  }
+  if (holidayModalOverlay) holidayModalOverlay.classList.remove("active");
+};
+
+window.switchHolidayTab = function(tabType) {
+  activeHolidayTab = tabType;
+  if (tabType === 'holidays') {
+    tabHolidaysBtn.classList.add('active');
+    tabWorkdaysBtn.classList.remove('active');
+  } else {
+    tabWorkdaysBtn.classList.add('active');
+    tabHolidaysBtn.classList.remove('active');
+  }
+  renderHolidayDatesList();
+};
+
+window.addCustomHolidayDate = function() {
+  const formattedDate = newHolidayDateInput.value ? newHolidayDateInput.value.trim().replace(/\//g, "-") : "";
+  if (!formattedDate) {
+    showCustomAlert("请先选择或输入日期 (YYYY/MM/DD)");
+    return;
+  }
+
+  const targetArr = activeHolidayTab === "holidays" ? editingHolidayCal.holidays : editingHolidayCal.workdays;
+
+  if (!targetArr.includes(formattedDate)) {
+    targetArr.push(formattedDate);
+    targetArr.sort();
+    newHolidayDateInput.value = "";
+    renderHolidayModalUI();
+    appendLog(`暂存${activeHolidayTab === "holidays" ? '放假日' : '调休补班日'}: ${formattedDate}`, "info");
+  } else {
+    showCustomAlert(`日期 ${formattedDate} 已存在列表中`);
+  }
+};
+
+window.removeHolidayDate = function(tabType, dateStr) {
+  const targetArr = tabType === "holidays" ? editingHolidayCal.holidays : editingHolidayCal.workdays;
+  const idx = targetArr.indexOf(dateStr);
+  if (idx !== -1) {
+    targetArr.splice(idx, 1);
+    renderHolidayModalUI();
+  }
+};
 
 async function syncHolidays(silent = false) {
   const core = getTauriCore();
@@ -381,7 +916,10 @@ async function syncHolidays(silent = false) {
   if (statusEl) statusEl.textContent = "正在在线同步...";
   try {
     const cal = await core.invoke("fetch_and_update_holidays", { year: null });
-    if (statusEl) statusEl.textContent = `已最新同步 (${cal.holidays.length}天放假/${cal.workdays.length}天调休)`;
+    currentHolidayCal = cal;
+    editingHolidayCal = JSON.parse(JSON.stringify(cal));
+    updateHolidayUI();
+    renderHolidayModalUI();
     appendLog(`节假日数据同步成功！已收录 ${cal.holidays.length} 个法定放假日及 ${cal.workdays.length} 个调休补班日。`, "success");
     if (!silent) showCustomAlert(`节假日日历同步成功！\n数据更新时间: ${cal.updated_at}\n已收录 ${cal.holidays.length} 天法定放假及 ${cal.workdays.length} 天调休补班。`);
   } catch (err) {
@@ -391,7 +929,11 @@ async function syncHolidays(silent = false) {
   }
 }
 
-syncHolidaysBtn.addEventListener("click", () => syncHolidays(false));
+window.syncHolidays = syncHolidays;
+
+if (syncHolidaysBtn) {
+  syncHolidaysBtn.addEventListener("click", () => openHolidayModal());
+}
 
 // ----------------- Tab 1: 系统计划任务修改器逻辑 (原始单次时间) -----------------
 async function fetchTasks() {
@@ -476,7 +1018,8 @@ window.testExecuteNow = async (id) => {
 };
 
 function calculateCountdown(targetTimeStr) {
-  const target = new Date(targetTimeStr.replace(/-/g, "/")).getTime();
+  if (!targetTimeStr) return "";
+  const target = new Date(targetTimeStr.replace(/\//g, "-").replace("T", " ")).getTime();
   const now = new Date().getTime();
   const diff = target - now;
 
@@ -533,7 +1076,88 @@ function renderTaskList() {
   }).join("");
 }
 
-// ----------------- Tab 2: 高级自主任务引擎逻辑 (包含循环周期与节假日) -----------------
+// ----------------- Tab 2: 高级自主任务引擎逻辑 (包含下次触发计算与倒计时) -----------------
+function getNextTriggerDateForCustomTask(task) {
+  const candidates = [];
+  const now = new Date();
+  const nowTime = now.getTime();
+
+  // 1. 检查不规则固定时刻
+  if (task.trigger_datetimes && task.trigger_datetimes.length > 0) {
+    for (const dtStr of task.trigger_datetimes) {
+      const dt = new Date(dtStr.replace(/\//g, "-").replace("T", " "));
+      if (!isNaN(dt.getTime()) && dt.getTime() > nowTime) {
+        candidates.push(dt);
+      }
+    }
+  }
+
+  // 2. 检查循环规则
+  if (task.recurrence && task.recurrence.mode !== "ONCE") {
+    const rule = task.recurrence;
+    const timeOfDay = rule.time_of_day || "09:00:00";
+    const parts = timeOfDay.split(":");
+    const h = parseInt(parts[0] || "0");
+    const m = parseInt(parts[1] || "0");
+    const s = parseInt(parts[2] || "0");
+
+    const testDate = new Date(now);
+    for (let i = 0; i < 366; i++) {
+      const year = testDate.getFullYear();
+      const month = testDate.getMonth() + 1;
+      const dateNum = testDate.getDate();
+      let dayOfWeek = testDate.getDay();
+      if (dayOfWeek === 0) dayOfWeek = 7;
+
+      const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(dateNum).padStart(2, '0')}`;
+
+      let isMatch = false;
+      if (rule.mode === "DAILY") {
+        isMatch = true;
+      } else if (rule.mode === "WEEKLY") {
+        const targetDays = (rule.days_of_week && rule.days_of_week.length > 0) ? rule.days_of_week : [1, 2, 3, 4, 5];
+        if (targetDays.includes(dayOfWeek)) isMatch = true;
+      } else if (rule.mode === "MONTHLY") {
+        const targetMonths = rule.days_of_month || [1];
+        const isLastDay = new Date(year, month, 0).getDate() === dateNum;
+        if (targetMonths.includes(dateNum) || (isLastDay && targetMonths.includes(32))) {
+          isMatch = true;
+        }
+      } else if (rule.mode === "WORKDAY") {
+        if (currentHolidayCal.workdays && currentHolidayCal.workdays.includes(dateStr)) {
+          isMatch = true;
+        } else if (currentHolidayCal.holidays && currentHolidayCal.holidays.includes(dateStr)) {
+          isMatch = false;
+        } else {
+          isMatch = dayOfWeek <= 5;
+        }
+      } else if (rule.mode === "HOLIDAY") {
+        if (currentHolidayCal.holidays && currentHolidayCal.holidays.includes(dateStr)) {
+          isMatch = true;
+        } else if (currentHolidayCal.workdays && currentHolidayCal.workdays.includes(dateStr)) {
+          isMatch = false;
+        } else {
+          isMatch = dayOfWeek > 5;
+        }
+      }
+
+      if (isMatch) {
+        const candidateDate = new Date(year, month - 1, dateNum, h, m, s);
+        if (candidateDate.getTime() > nowTime) {
+          candidates.push(candidateDate);
+          break;
+        }
+      }
+
+      testDate.setDate(testDate.getDate() + 1);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.getTime() - b.getTime());
+  return candidates[0];
+}
+
 async function fetchCustomTasks() {
   const core = getTauriCore();
   if (!core) return;
@@ -678,6 +1302,9 @@ function renderCustomTaskList() {
     }
 
     const recurText = formatRecurrenceText(task.recurrence);
+    const nextTriggerDate = getNextTriggerDateForCustomTask(task);
+    const nextTriggerStr = nextTriggerDate ? formatDatetimeString(nextTriggerDate) : null;
+    const countdownText = nextTriggerStr ? calculateCountdown(nextTriggerStr) : null;
 
     return `
       <div class="task-item" data-id="${task.id}">
@@ -689,6 +1316,7 @@ function renderCustomTaskList() {
               <span class="slider"></span>
             </label>
             ${task.always_on_top ? '<span class="action-chip ENABLE">📌 置顶弹窗</span>' : ''}
+            ${(task.is_enabled && countdownText) ? `<span class="task-status-badge PENDING custom-countdown" data-next="${nextTriggerStr}">⏳ 倒计时: ${countdownText}</span>` : ''}
           </div>
 
           <div style="font-size:11px; color:#71717a; word-break:break-all;">${timeWindowStr}</div>
@@ -713,25 +1341,37 @@ function renderCustomTaskList() {
 // ----------------- 时钟与初始化 -----------------
 function startClocks() {
   setInterval(() => {
-    const now = new Date();
-    liveClockEl.textContent = now.toLocaleTimeString('zh-CN', { hour12: false });
+    liveClockEl.textContent = getFormattedNowTime();
 
+    // 1. 系统任务倒计时更新
     document.querySelectorAll(".countdown").forEach(el => {
       const targetStr = el.getAttribute("data-target");
       if (targetStr) {
         el.textContent = `⏳ 倒计时: ${calculateCountdown(targetStr)}`;
       }
     });
+
+    // 2. 自主任务标题右侧倒计时更新
+    document.querySelectorAll(".custom-countdown").forEach(el => {
+      const nextStr = el.getAttribute("data-next");
+      if (nextStr) {
+        const cd = calculateCountdown(nextStr);
+        el.textContent = `⏳ 倒计时: ${cd}`;
+      }
+    });
   }, 1000);
 }
 
 function initDefaultTime() {
-  setPresetOffset(5);
+  if (targetDatetimeInput) {
+    targetDatetimeInput.value = "";
+  }
 }
 
 // 事件监听与 Tab 切换
 window.addEventListener("DOMContentLoaded", () => {
   initMonthdaysOptions();
+  initCustomDatePickers(document);
 
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {

@@ -63,8 +63,10 @@
           </div>
 
           <div class="form-group">
-            <label for="targetDatetime">修改生效时间 (日期与精确时刻)</label>
-            <input type="datetime-local" id="targetDatetime" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required />
+            <label for="targetDatetime">修改生效时间 (日期与波段时刻)</label>
+            <div class="custom-datetime-wrapper">
+              <input type="text" id="targetDatetime" placeholder="YYYY/MM/DD --:--:--" required />
+            </div>
             <div class="quick-preset">
               <button type="button" class="preset-btn reset" onclick="resetToNow()">设为现在</button>
               <button type="button" class="preset-btn" onclick="setPresetOffset(1)">+1 分钟</button>
@@ -143,9 +145,13 @@
             <div id="enableWindowsContainer" class="multi-input-container">
               <div class="multi-window-row">
                 <div class="window-inputs-group">
-                  <input type="datetime-local" class="window-start-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后生效启用" placeholder="开启时间" />
+                  <div class="custom-datetime-wrapper">
+                    <input type="text" class="window-start-input" title="在此时间点后生效启用" placeholder="YYYY/MM/DD --:--:--" />
+                  </div>
                   <span class="window-separator">⬇ 启用至 ⬇</span>
-                  <input type="datetime-local" class="window-end-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" title="在此时间点后失效禁用" placeholder="截止时间" />
+                  <div class="custom-datetime-wrapper">
+                    <input type="text" class="window-end-input" title="在此时间点后失效禁用" placeholder="YYYY/MM/DD --:--:--" />
+                  </div>
                 </div>
                 <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
               </div>
@@ -229,7 +235,9 @@
             <label>不规则具体触发时间点 (可选填单次指定时间)</label>
             <div id="triggerTimesContainer" class="multi-input-container">
               <div class="multi-input-row">
-                <input type="datetime-local" class="trigger-time-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" />
+                <div class="custom-datetime-wrapper">
+                  <input type="text" class="trigger-time-input" placeholder="YYYY/MM/DD --:--:--" />
+                </div>
                 <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
               </div>
             </div>
@@ -327,6 +335,48 @@
       </div>
       <div class="modal-footer">
         <button id="topmostCloseBtn" class="modal-btn primary">确认并关闭窗口</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Holiday & Makeup Workday Calendar Manager Modal Overlay -->
+  <div id="holidayModalOverlay" class="modal-overlay">
+    <div class="modal-card holiday-manager-card">
+      <div class="modal-header" style="justify-content: space-between;">
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <div class="modal-icon-box warning">📅</div>
+          <div>
+            <h3 class="modal-title">节假日与调休日历管理</h3>
+            <span id="holidayModalSub" style="font-size:11px; color:#a1a1aa;">可查阅及自定义编辑法定放假与周末补班安排</span>
+          </div>
+        </div>
+        <button type="button" class="preset-btn reset" onclick="syncHolidays(false)" title="在线在线拉取国务院最新数据">🔄 在线同步</button>
+      </div>
+
+      <div class="modal-body" style="display:flex; flex-direction:column; gap:12px;">
+        <!-- 放假日与调休日 标签页分组 -->
+        <div class="holiday-tabs">
+          <button type="button" class="holiday-tab-btn active" id="tabHolidaysBtn" onclick="switchHolidayTab('holidays')">🎉 法定放假日 (<span id="holidaysCount">0</span>)</button>
+          <button type="button" class="holiday-tab-btn" id="tabWorkdaysBtn" onclick="switchHolidayTab('workdays')">💼 周末调休补班日 (<span id="workdaysCount">0</span>)</button>
+        </div>
+
+        <!-- 手动添加新日期行 -->
+        <div class="add-holiday-row">
+          <div class="custom-datetime-wrapper" style="flex:1;">
+            <input type="text" id="newHolidayDateInput" class="holiday-date-input" placeholder="YYYY/MM/DD" />
+          </div>
+          <button type="button" class="add-btn" onclick="addCustomHolidayDate()" style="align-self:stretch;">+ 手动添加日期</button>
+        </div>
+
+        <!-- 日期列表芯片容器 -->
+        <div id="holidayDatesContainer" class="holiday-dates-grid">
+          <!-- Dynamically populated chips of YYYY-MM-DD dates with delete cross -->
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="button" class="modal-btn secondary" onclick="closeHolidayModal(false)">取消</button>
+        <button type="button" class="modal-btn primary" onclick="closeHolidayModal(true)">保存并应用</button>
       </div>
     </div>
   </div>
