@@ -8,6 +8,25 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::Emitter;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RecurrenceRule {
+    pub mode: String, // "ONCE", "DAILY", "WEEKLY", "MONTHLY", "WORKDAY", "HOLIDAY"
+    #[serde(default)]
+    pub days_of_week: Vec<u32>, // 1=Mon, 2=Tue, ..., 7=Sun
+    #[serde(default)]
+    pub days_of_month: Vec<u32>, // 1..31, 32=last day of month
+    #[serde(default)]
+    pub time_of_day: String, // "HH:mm:ss"
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HolidayCalendar {
+    pub updated_at: String,
+    pub holidays: Vec<String>, // 放假日期 "YYYY-MM-DD"
+    pub workdays: Vec<String>, // 调休补班日期 "YYYY-MM-DD"
+}
+
+// 恢复原始系统计划任务修改器结构（仅单次具体时间目标）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRule {
     pub id: String,
@@ -25,6 +44,7 @@ pub struct TimeWindow {
     pub end_time: Option<String>,   // "YYYY-MM-DD HH:mm:ss"
 }
 
+// 高级自主任务引擎（支持丰富的定时循环设置与节假日/调休日历）
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CustomTaskRule {
     pub id: String,
@@ -35,20 +55,23 @@ pub struct CustomTaskRule {
     #[serde(default)]
     pub enable_window_end: Option<String>,
     #[serde(default)]
-    pub enable_windows: Vec<TimeWindow>,     // 多个启用/禁用有效时间区间
-    pub trigger_datetimes: Vec<String>,       // 多个不规则时间点
-    pub executables: Vec<String>,             // 多个执行程序路径/命令行
-    pub popup_messages: Vec<String>,          // 多个显示弹窗内容
-    pub always_on_top: bool,                  // 弹窗置顶
+    pub enable_windows: Vec<TimeWindow>, // 多个启用/禁用有效时间区间
+    pub trigger_datetimes: Vec<String>,  // 多个不规则时间点
+    pub executables: Vec<String>,        // 多个执行程序路径/命令行
+    pub popup_messages: Vec<String>,     // 多个显示弹窗内容
+    pub always_on_top: bool,             // 弹窗置顶
     #[serde(default)]
-    pub triggered_history: Vec<String>,       // 已触发记录
+    pub triggered_history: Vec<String>, // 已触发记录
     pub created_at: String,
+    #[serde(default)]
+    pub recurrence: Option<RecurrenceRule>,
 }
 
 #[derive(Default)]
 pub struct AppState {
     pub tasks: Arc<Mutex<Vec<TaskRule>>>,
     pub custom_tasks: Arc<Mutex<Vec<CustomTaskRule>>>,
+    pub holiday_calendar: Arc<Mutex<HolidayCalendar>>,
 }
 
 fn get_config_path() -> PathBuf {
@@ -67,6 +90,15 @@ fn get_custom_config_path() -> PathBuf {
         }
     }
     PathBuf::from("custom_tasks.json")
+}
+
+fn get_holiday_config_path() -> PathBuf {
+    if let Ok(exe_path) = std::env::current_exe() {
+        if let Some(dir) = exe_path.parent() {
+            return dir.join("holidays.json");
+        }
+    }
+    PathBuf::from("holidays.json")
 }
 
 fn load_tasks_from_disk() -> Vec<TaskRule> {
@@ -104,6 +136,91 @@ fn save_custom_tasks_to_disk(tasks: &[CustomTaskRule]) {
     let path = get_custom_config_path();
     if let Ok(json) = serde_json::to_string_pretty(tasks) {
         let _ = fs::write(path, json);
+    }
+}
+
+fn load_holiday_calendar_from_disk() -> HolidayCalendar {
+    let path = get_holiday_config_path();
+    if path.exists() {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if let Ok(cal) = serde_json::from_str::<HolidayCalendar>(&content) {
+                return cal;
+            }
+        }
+    }
+    HolidayCalendar::default()
+}
+
+fn save_holiday_calendar_to_disk(cal: &HolidayCalendar) {
+    let path = get_holiday_config_path();
+    if let Ok(json) = serde_json::to_string_pretty(cal) {
+        let _ = fs::write(path, json);
+    }
+}
+
+pub fn is_workday(date: chrono::NaiveDate, calendar: &HolidayCalendar) -> bool {
+    use chrono::Datelike;
+    let date_str = date.format("%Y-%m-%d").to_string();
+
+    if calendar.workdays.contains(&date_str) {
+        return true;
+    }
+    if calendar.holidays.contains(&date_str) {
+        return false;
+    }
+
+    let weekday = date.weekday().number_from_monday();
+    weekday <= 5
+}
+
+pub fn matches_recurrence(
+    rule: &RecurrenceRule,
+    now: chrono::DateTime<chrono::Local>,
+    calendar: &HolidayCalendar,
+) -> bool {
+    use chrono::Datelike;
+
+    if !rule.time_of_day.is_empty() {
+        let current_time_str = now.format("%H:%M:%S").to_string();
+        let target_time = if rule.time_of_day.len() == 5 {
+            format!("{}:00", rule.time_of_day)
+        } else {
+            rule.time_of_day.clone()
+        };
+        if current_time_str != target_time {
+            return false;
+        }
+    }
+
+    let today = now.date_naive();
+    let weekday = today.weekday().number_from_monday();
+    let day_of_month = today.day();
+
+    match rule.mode.as_str() {
+        "DAILY" => true,
+        "WEEKLY" => {
+            if rule.days_of_week.is_empty() {
+                weekday <= 5
+            } else {
+                rule.days_of_week.contains(&weekday)
+            }
+        }
+        "MONTHLY" => {
+            let is_last_day_of_month = {
+                let next_day = today + chrono::Duration::days(1);
+                next_day.month() != today.month()
+            };
+            if rule.days_of_month.contains(&day_of_month) {
+                true
+            } else if is_last_day_of_month && rule.days_of_month.contains(&32) {
+                true
+            } else {
+                false
+            }
+        }
+        "WORKDAY" => is_workday(today, calendar),
+        "HOLIDAY" => !is_workday(today, calendar),
+        _ => false,
     }
 }
 
@@ -256,7 +373,103 @@ fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskR
     let _ = app_handle.emit("custom_task_triggered", payload);
 }
 
-// ----------------- Tauri IPC APIs (标准系统计划任务) -----------------
+// ----------------- 节假日在线同步服务 -----------------
+async fn fetch_year_holidays(client: &reqwest::Client, year: u32) -> Result<(Vec<String>, Vec<String>), String> {
+    let url = format!("https://timor.tech/api/holiday/year/{}/", year);
+    let req = client.get(&url).header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)");
+
+    let res = match req.send().await {
+        Ok(r) => r,
+        Err(e) => return Err(format!("网络请求失败: {}", e)),
+    };
+
+    let json: serde_json::Value = match res.json().await {
+        Ok(j) => j,
+        Err(e) => return Err(format!("解析 JSON 失败: {}", e)),
+    };
+
+    let mut holidays = Vec::new();
+    let mut workdays = Vec::new();
+
+    if let Some(holiday_map) = json.get("holiday").and_then(|v| v.as_object()) {
+        for (_k, item) in holiday_map {
+            if let Some(date_str) = item.get("date").and_then(|s| s.as_str()) {
+                let is_holiday = item.get("holiday").and_then(|b| b.as_bool()).unwrap_or(false);
+                if is_holiday {
+                    holidays.push(date_str.to_string());
+                } else {
+                    workdays.push(date_str.to_string());
+                }
+            }
+        }
+    }
+
+    Ok((holidays, workdays))
+}
+
+// ----------------- Tauri IPC APIs (节假日日历) -----------------
+#[tauri::command]
+fn get_holiday_calendar(state: tauri::State<'_, AppState>) -> HolidayCalendar {
+    let cal = state.holiday_calendar.lock().unwrap();
+    cal.clone()
+}
+
+#[tauri::command]
+async fn fetch_and_update_holidays(
+    state: tauri::State<'_, AppState>,
+    year: Option<u32>,
+) -> Result<HolidayCalendar, String> {
+    use chrono::Datelike;
+    let target_year = year.unwrap_or_else(|| Local::now().year() as u32);
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("构建 HTTP 客户端失败: {}", e))?;
+
+    let mut all_holidays = Vec::new();
+    let mut all_workdays = Vec::new();
+
+    for y in [target_year, target_year + 1] {
+        if let Ok((h_list, w_list)) = fetch_year_holidays(&client, y).await {
+            all_holidays.extend(h_list);
+            all_workdays.extend(w_list);
+        }
+    }
+
+    let mut cal = state.holiday_calendar.lock().unwrap();
+    if !all_holidays.is_empty() || !all_workdays.is_empty() {
+        for h in all_holidays {
+            if !cal.holidays.contains(&h) {
+                cal.holidays.push(h);
+            }
+        }
+        for w in all_workdays {
+            if !cal.workdays.contains(&w) {
+                cal.workdays.push(w);
+            }
+        }
+        cal.holidays.sort();
+        cal.workdays.sort();
+        cal.updated_at = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+        save_holiday_calendar_to_disk(&cal);
+        Ok(cal.clone())
+    } else {
+        Err("未能从网络拉取到最新节假日数据，保持现有缓存数据".into())
+    }
+}
+
+#[tauri::command]
+fn save_holiday_calendar(
+    state: tauri::State<'_, AppState>,
+    calendar: HolidayCalendar,
+) -> Result<(), String> {
+    let mut cal = state.holiday_calendar.lock().unwrap();
+    *cal = calendar.clone();
+    save_holiday_calendar_to_disk(&cal);
+    Ok(())
+}
+
+// ----------------- Tauri IPC APIs (标准系统计划任务 - 恢复原始单次时间) -----------------
 #[tauri::command]
 fn get_tasks(state: tauri::State<'_, AppState>) -> Vec<TaskRule> {
     let tasks = state.tasks.lock().unwrap();
@@ -341,6 +554,7 @@ fn add_custom_task(
     executables: Vec<String>,
     popup_messages: Vec<String>,
     always_on_top: bool,
+    recurrence: Option<RecurrenceRule>,
 ) -> Result<CustomTaskRule, String> {
     if name.trim().is_empty() {
         return Err("自定义任务名称不能为空".into());
@@ -362,6 +576,7 @@ fn add_custom_task(
         always_on_top,
         triggered_history: Vec::new(),
         created_at: now_str,
+        recurrence,
     };
 
     let mut tasks = state.custom_tasks.lock().unwrap();
@@ -407,6 +622,7 @@ fn start_background_scheduler(
     app_handle: tauri::AppHandle,
     tasks_mutex: Arc<Mutex<Vec<TaskRule>>>,
     custom_tasks_mutex: Arc<Mutex<Vec<CustomTaskRule>>>,
+    holiday_calendar_mutex: Arc<Mutex<HolidayCalendar>>,
 ) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -415,8 +631,10 @@ fn start_background_scheduler(
             let now = Local::now();
             let now_naive = now.naive_local();
             let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+            let now_date_str = now.format("%Y-%m-%d").to_string();
+            let holiday_cal = holiday_calendar_mutex.lock().unwrap().clone();
 
-            // 1. 系统计划任务修改器检测
+            // 1. 系统计划任务修改器检测（原始精准时间模式）
             let mut should_save_tasks = false;
             let mut tasks_to_notify = false;
 
@@ -453,7 +671,7 @@ fn start_background_scheduler(
                 let _ = app_handle.emit("tasks_updated", ());
             }
 
-            // 2. 高级自主任务引擎检测 (支持多组有效启用时间窗口)
+            // 2. 高级自主任务引擎检测（包含多种循环周期与节假日处理）
             let mut should_save_custom = false;
             let mut custom_updated = false;
 
@@ -463,7 +681,6 @@ fn start_background_scheduler(
                     let mut in_time_window = true;
                     let mut windows = task.enable_windows.clone();
 
-                    // 兼容单区间旧数据
                     if windows.is_empty() && (task.enable_window_start.is_some() || task.enable_window_end.is_some()) {
                         windows.push(TimeWindow {
                             start_time: task.enable_window_start.clone(),
@@ -500,13 +717,26 @@ fn start_background_scheduler(
                         continue;
                     }
 
-                    // 校验触发时刻
+                    // A. 校验单次不规则触发时刻
                     for dt in &task.trigger_datetimes {
                         if dt == &now_str && !task.triggered_history.contains(dt) {
                             task.triggered_history.push(dt.clone());
                             should_save_custom = true;
                             custom_updated = true;
                             trigger_custom_task_actions(&app_handle, task);
+                        }
+                    }
+
+                    // B. 校验循环规则
+                    if let Some(ref rule) = task.recurrence {
+                        if rule.mode != "ONCE" {
+                            let trigger_key = format!("recur_{}_{}", now_date_str, rule.time_of_day);
+                            if matches_recurrence(rule, now, &holiday_cal) && !task.triggered_history.contains(&trigger_key) {
+                                task.triggered_history.push(trigger_key);
+                                should_save_custom = true;
+                                custom_updated = true;
+                                trigger_custom_task_actions(&app_handle, task);
+                            }
                         }
                     }
                 }
@@ -534,9 +764,13 @@ pub fn run() {
     let initial_custom_tasks = load_custom_tasks_from_disk();
     let custom_tasks_mutex = Arc::new(Mutex::new(initial_custom_tasks));
 
+    let initial_holiday_cal = load_holiday_calendar_from_disk();
+    let holiday_calendar_mutex = Arc::new(Mutex::new(initial_holiday_cal));
+
     let app_state = AppState {
         tasks: tasks_mutex.clone(),
         custom_tasks: custom_tasks_mutex.clone(),
+        holiday_calendar: holiday_calendar_mutex.clone(),
     };
 
     tauri::Builder::default()
@@ -551,11 +785,14 @@ pub fn run() {
             add_custom_task,
             delete_custom_task,
             toggle_custom_task,
-            execute_custom_task_now
+            execute_custom_task_now,
+            get_holiday_calendar,
+            fetch_and_update_holidays,
+            save_holiday_calendar
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
-            start_background_scheduler(handle, tasks_mutex, custom_tasks_mutex);
+            start_background_scheduler(handle, tasks_mutex, custom_tasks_mutex, holiday_calendar_mutex);
 
             use tauri::menu::{Menu, MenuItem};
             use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};

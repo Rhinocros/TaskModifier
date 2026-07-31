@@ -22,6 +22,7 @@ const taskListContainer = document.getElementById("taskList");
 const taskCountBadge = document.getElementById("taskCount");
 const liveClockEl = document.getElementById("liveClock");
 const logTerminal = document.getElementById("logTerminal");
+const syncHolidaysBtn = document.getElementById("syncHolidaysBtn");
 
 // Custom Task Elements
 const addCustomRuleForm = document.getElementById("addCustomRuleForm");
@@ -220,7 +221,7 @@ window.addTriggerTimeRow = () => {
   row.className = "multi-input-row";
   const defaultVal = formatToDatetimeInputValue(new Date(Date.now() + 5 * 60000));
   row.innerHTML = `
-    <input type="datetime-local" class="trigger-time-input" value="${defaultVal}" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required />
+    <input type="datetime-local" class="trigger-time-input" value="${defaultVal}" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" />
     <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
   `;
   triggerTimesContainer.appendChild(row);
@@ -246,7 +247,153 @@ window.addPopupRow = () => {
   popupsContainer.appendChild(row);
 };
 
-// ----------------- Tab 1: 系统计划任务修改器逻辑 -----------------
+// ----------------- 自主任务循环周期 UI 交互 -----------------
+window.initMonthdaysOptions = function() {
+  const wrap = document.getElementById("customMonthdaysWrap");
+  if (!wrap) return;
+  let html = '';
+  for (let i = 1; i <= 31; i++) {
+    html += `<label class="chip-checkbox"><input type="checkbox" value="${i}" ${i === 1 ? 'checked' : ''} /><span>${i}日</span></label>`;
+  }
+  html += `<label class="chip-checkbox"><input type="checkbox" value="32" /><span>月末</span></label>`;
+  wrap.innerHTML = html;
+};
+
+window.toggleRecurrenceUI = function(prefix = 'custom') {
+  const selectedMode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
+
+  ['ONCE', 'WEEKLY', 'MONTHLY'].forEach(mode => {
+    const panel = document.getElementById(`${prefix}Panel${mode}`);
+    if (panel) panel.classList.remove('active');
+  });
+
+  const activePanel = document.getElementById(`${prefix}Panel${selectedMode}`);
+  if (activePanel) activePanel.classList.add('active');
+
+  const timeGroup = document.getElementById(`${prefix}TimeOfDayGroup`);
+  if (timeGroup) {
+    timeGroup.style.display = selectedMode === "ONCE" ? "none" : "flex";
+  }
+};
+
+window.selectWeekdays = function(prefix, type) {
+  const checkboxes = document.querySelectorAll(`#${prefix}WeekdaysWrap input[type="checkbox"]`);
+  checkboxes.forEach(cb => {
+    const val = parseInt(cb.value);
+    if (type === 'workday') cb.checked = val >= 1 && val <= 5;
+    else if (type === 'weekend') cb.checked = val === 6 || val === 7;
+    else if (type === 'all') cb.checked = true;
+  });
+};
+
+window.selectMonthdays = function(prefix, type) {
+  const checkboxes = document.querySelectorAll(`#${prefix}MonthdaysWrap input[type="checkbox"]`);
+  checkboxes.forEach(cb => {
+    const val = parseInt(cb.value);
+    if (type === 'mid') cb.checked = val === 1 || val === 15;
+    else if (type === 'last') cb.checked = val === 32;
+  });
+};
+
+function getRecurrenceRuleFromUI(prefix = 'custom') {
+  const mode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
+  if (mode === "ONCE") return null;
+
+  const timeOfDayInput = document.getElementById(`${prefix}TimeOfDay`);
+  let time_of_day = timeOfDayInput ? timeOfDayInput.value : "09:00:00";
+  if (time_of_day && time_of_day.length === 5) time_of_day += ":00";
+
+  let days_of_week = [];
+  if (mode === "WEEKLY") {
+    const checkedWeek = document.querySelectorAll(`#${prefix}WeekdaysWrap input[type="checkbox"]:checked`);
+    days_of_week = Array.from(checkedWeek).map(cb => parseInt(cb.value));
+  }
+
+  let days_of_month = [];
+  if (mode === "MONTHLY") {
+    const checkedMonth = document.querySelectorAll(`#${prefix}MonthdaysWrap input[type="checkbox"]:checked`);
+    days_of_month = Array.from(checkedMonth).map(cb => parseInt(cb.value));
+  }
+
+  return {
+    mode,
+    days_of_week,
+    days_of_month,
+    time_of_day
+  };
+}
+
+function formatRecurrenceText(rule) {
+  if (!rule || rule.mode === "ONCE") return "";
+  const timeStr = rule.time_of_day || "";
+
+  if (rule.mode === "DAILY") {
+    return `🔄 每天 ${timeStr}`;
+  }
+  if (rule.mode === "WORKDAY") {
+    return `💼 法定工作日 ${timeStr} (避开节假日+含调休)`;
+  }
+  if (rule.mode === "HOLIDAY") {
+    return `🎉 法定节假日 ${timeStr}`;
+  }
+  if (rule.mode === "WEEKLY") {
+    const weekMap = { 1: "一", 2: "二", 3: "三", 4: "四", 5: "五", 6: "六", 7: "日" };
+    const days = (rule.days_of_week || []).map(d => weekMap[d]).join(",");
+    return `📅 每周(${days || '周一至周五'}) ${timeStr}`;
+  }
+  if (rule.mode === "MONTHLY") {
+    const days = (rule.days_of_month || []).map(d => d === 32 ? "月末" : `${d}号`).join(",");
+    return `📆 每月(${days || '1号'}) ${timeStr}`;
+  }
+  return `🔁 循环模式(${rule.mode}) ${timeStr}`;
+}
+
+// ----------------- 节假日同步逻辑 -----------------
+async function fetchHolidayCalendar() {
+  const core = getTauriCore();
+  const statusEl = document.getElementById("holidayStatusText");
+  if (!core) {
+    if (statusEl) statusEl.textContent = "模拟模式 (标准双休)";
+    return;
+  }
+
+  try {
+    const cal = await core.invoke("get_holiday_calendar");
+    if (cal && (cal.holidays.length > 0 || cal.workdays.length > 0)) {
+      if (statusEl) statusEl.textContent = `已收录 ${cal.holidays.length}天放假 / ${cal.workdays.length}天调休`;
+    } else {
+      if (statusEl) statusEl.textContent = "未在线同步 (点击同步)";
+      syncHolidays(true);
+    }
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "获取失败";
+  }
+}
+
+async function syncHolidays(silent = false) {
+  const core = getTauriCore();
+  const statusEl = document.getElementById("holidayStatusText");
+  if (!core) {
+    if (!silent) showCustomAlert("浏览器模拟调试环境无法调用在线接口");
+    return;
+  }
+
+  if (statusEl) statusEl.textContent = "正在在线同步...";
+  try {
+    const cal = await core.invoke("fetch_and_update_holidays", { year: null });
+    if (statusEl) statusEl.textContent = `已最新同步 (${cal.holidays.length}天放假/${cal.workdays.length}天调休)`;
+    appendLog(`节假日数据同步成功！已收录 ${cal.holidays.length} 个法定放假日及 ${cal.workdays.length} 个调休补班日。`, "success");
+    if (!silent) showCustomAlert(`节假日日历同步成功！\n数据更新时间: ${cal.updated_at}\n已收录 ${cal.holidays.length} 天法定放假及 ${cal.workdays.length} 天调休补班。`);
+  } catch (err) {
+    if (statusEl) statusEl.textContent = "同步异常";
+    appendLog(`同步节假日失败: ${err}`, "error");
+    if (!silent) showCustomAlert(`同步节假日数据失败: ${err}\n系统将默认采用标准工作日逻辑。`);
+  }
+}
+
+syncHolidaysBtn.addEventListener("click", () => syncHolidays(false));
+
+// ----------------- Tab 1: 系统计划任务修改器逻辑 (原始单次时间) -----------------
 async function fetchTasks() {
   const core = getTauriCore();
   if (!core) {
@@ -386,7 +533,7 @@ function renderTaskList() {
   }).join("");
 }
 
-// ----------------- Tab 2: 高级自主任务引擎逻辑 -----------------
+// ----------------- Tab 2: 高级自主任务引擎逻辑 (包含循环周期与节假日) -----------------
 async function fetchCustomTasks() {
   const core = getTauriCore();
   if (!core) return;
@@ -407,8 +554,10 @@ async function handleAddCustomTask(e) {
     return;
   }
 
+  const recurrence = getRecurrenceRuleFromUI('custom');
+
   // 收集有效时间区间 (多个起点与终点)
-  const windowRows = document.querySelectorAll(".multi-window-row");
+  const windowRows = document.querySelectorAll("#tab-custom .multi-window-row");
   const enableWindows = Array.from(windowRows).map(row => {
     const startVal = row.querySelector(".window-start-input").value;
     const endVal = row.querySelector(".window-end-input").value;
@@ -419,24 +568,24 @@ async function handleAddCustomTask(e) {
   }).filter(w => w.start_time || w.end_time);
 
   // 收集不规则时间点
-  const timeInputs = document.querySelectorAll(".trigger-time-input");
+  const timeInputs = document.querySelectorAll("#tab-custom .trigger-time-input");
   const triggerTimes = Array.from(timeInputs)
     .map(input => formatDatetimeString(input.value))
     .filter(val => val.length > 0);
 
-  if (triggerTimes.length === 0) {
-    showCustomAlert("请至少设置一个触发时间点");
+  if (!recurrence && triggerTimes.length === 0) {
+    showCustomAlert("请设置循环模式或至少设置一个不规则触发时间点");
     return;
   }
 
   // 收集可执行程序路径
-  const exeInputs = document.querySelectorAll(".executable-input");
+  const exeInputs = document.querySelectorAll("#tab-custom .executable-input");
   const executables = Array.from(exeInputs)
     .map(input => input.value.trim())
     .filter(val => val.length > 0);
 
   // 收集弹窗显示内容
-  const popupInputs = document.querySelectorAll(".popup-input");
+  const popupInputs = document.querySelectorAll("#tab-custom .popup-input");
   const popupMessages = Array.from(popupInputs)
     .map(input => input.value.trim())
     .filter(val => val.length > 0);
@@ -453,10 +602,12 @@ async function handleAddCustomTask(e) {
       triggerDatetimes: triggerTimes,
       executables,
       popupMessages,
-      alwaysOnTop
+      alwaysOnTop,
+      recurrence
     });
 
-    appendLog(`已保存自主高级任务规则: [${name}] (含 ${enableWindows.length} 组有效时间段, ${triggerTimes.length} 个执行时间点)`, "success");
+    const recurLabel = formatRecurrenceText(recurrence);
+    appendLog(`已保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
     customTaskNameInput.value = "";
     fetchCustomTasks();
   } catch (err) {
@@ -526,6 +677,8 @@ function renderCustomTaskList() {
       timeWindowStr = `有效时间区间: [${task.enable_window_start || '无起点'} 至 ${task.enable_window_end || '无终点'}]`;
     }
 
+    const recurText = formatRecurrenceText(task.recurrence);
+
     return `
       <div class="task-item" data-id="${task.id}">
         <div class="task-meta">
@@ -541,6 +694,7 @@ function renderCustomTaskList() {
           <div style="font-size:11px; color:#71717a; word-break:break-all;">${timeWindowStr}</div>
 
           <div class="custom-tags-group">
+            ${recurText ? `<span class="custom-tag time">${recurText}</span>` : ''}
             ${task.trigger_datetimes.map(t => `<span class="custom-tag time">⏰ ${t}</span>`).join("")}
             ${task.executables.map(e => `<span class="custom-tag exe">🚀 ${e}</span>`).join("")}
             ${task.popup_messages.map(m => `<span class="custom-tag msg">💬 ${m}</span>`).join("")}
@@ -573,11 +727,12 @@ function startClocks() {
 
 function initDefaultTime() {
   setPresetOffset(5);
-  addTriggerTimeRow();
 }
 
 // 事件监听与 Tab 切换
 window.addEventListener("DOMContentLoaded", () => {
+  initMonthdaysOptions();
+
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -595,6 +750,7 @@ window.addEventListener("DOMContentLoaded", () => {
   startClocks();
 
   setTimeout(() => {
+    fetchHolidayCalendar();
     fetchTasks();
     fetchCustomTasks();
   }, 300);

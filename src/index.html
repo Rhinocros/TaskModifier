@@ -25,6 +25,9 @@
       </div>
 
       <div class="header-status">
+        <button type="button" class="holiday-status-btn" id="syncHolidaysBtn" title="点击手动同步最新法定节假日及调休安排">
+          📅 节假日日历: <span id="holidayStatusText">获取中...</span>
+        </button>
         <div class="status-badge admin">
           <span class="dot"></span> 管理员权限运行中
         </div>
@@ -151,16 +154,86 @@
             <span class="help-text">不填则规则长期保持有效；满足任意一组时间段即自动激活规则</span>
           </div>
 
+          <!-- 定时循环周期设置 -->
+          <div class="form-group">
+            <label>定时循环周期 (可选循环模式)</label>
+            <div class="recurrence-box">
+              <div class="mode-grid">
+                <label class="mode-chip" title="仅按下方设定的具体不规则时刻触发">
+                  <input type="radio" name="customRecurrenceMode" value="ONCE" checked onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">⏱️ 不循环</span>
+                </label>
+                <label class="mode-chip" title="每天固定时刻触发">
+                  <input type="radio" name="customRecurrenceMode" value="DAILY" onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">🔄 每天</span>
+                </label>
+                <label class="mode-chip" title="每周几固定时刻触发">
+                  <input type="radio" name="customRecurrenceMode" value="WEEKLY" onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">📅 每周/星期</span>
+                </label>
+                <label class="mode-chip" title="每月几日固定时刻触发">
+                  <input type="radio" name="customRecurrenceMode" value="MONTHLY" onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">📆 每月几日</span>
+                </label>
+                <label class="mode-chip" title="法定工作日触发（自动避开节假日、含调休）">
+                  <input type="radio" name="customRecurrenceMode" value="WORKDAY" onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">💼 法定工作日</span>
+                </label>
+                <label class="mode-chip" title="法定节假日放假期间触发">
+                  <input type="radio" name="customRecurrenceMode" value="HOLIDAY" onchange="toggleRecurrenceUI('custom')" />
+                  <span class="chip-label">🎉 法定节假日</span>
+                </label>
+              </div>
+
+              <!-- WEEKLY 面板 -->
+              <div id="customPanelWEEKLY" class="recurrence-subpanel">
+                <label>选择星期 (可多选)</label>
+                <div class="quick-chip-btns">
+                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'workday')">周一至周五</button>
+                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'weekend')">周末</button>
+                  <button type="button" class="chip-quick-btn" onclick="selectWeekdays('custom', 'all')">全选</button>
+                </div>
+                <div class="chips-wrap" id="customWeekdaysWrap">
+                  <label class="chip-checkbox"><input type="checkbox" value="1" checked /><span>周一</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="2" checked /><span>周二</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="3" checked /><span>周三</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="4" checked /><span>周四</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="5" checked /><span>周五</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="6" /><span>周六</span></label>
+                  <label class="chip-checkbox"><input type="checkbox" value="7" /><span>周日</span></label>
+                </div>
+              </div>
+
+              <!-- MONTHLY 面板 -->
+              <div id="customPanelMONTHLY" class="recurrence-subpanel">
+                <label>选择每月日期 (可多选)</label>
+                <div class="quick-chip-btns">
+                  <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'mid')">1日与15日</button>
+                  <button type="button" class="chip-quick-btn" onclick="selectMonthdays('custom', 'last')">月末最后一天</button>
+                </div>
+                <div class="chips-wrap" id="customMonthdaysWrap" style="max-height:110px; overflow-y:auto;">
+                  <!-- Dynamically populated 1..31 + 32(月末) -->
+                </div>
+              </div>
+
+              <!-- 循环时间时刻选择器 (非ONCE模式使用) -->
+              <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
+                <label for="customTimeOfDay">每日触发时刻 (HH:mm:ss)</label>
+                <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius:6px; color:#fff;" />
+              </div>
+            </div>
+          </div>
+
           <!-- 多个不规则执行时间点 -->
           <div class="form-group">
-            <label>触发时间点 (可添加多个不规则时间)</label>
+            <label>不规则具体触发时间点 (可选填单次指定时间)</label>
             <div id="triggerTimesContainer" class="multi-input-container">
               <div class="multi-input-row">
-                <input type="datetime-local" class="trigger-time-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" required />
+                <input type="datetime-local" class="trigger-time-input" min="2000-01-01T00:00:00" max="2099-12-31T23:59:59" step="1" />
                 <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
               </div>
             </div>
-            <button type="button" class="add-btn" onclick="addTriggerTimeRow()">+ 添加执行时间</button>
+            <button type="button" class="add-btn" onclick="addTriggerTimeRow()">+ 添加具体时间</button>
           </div>
 
           <!-- 多个执行程序路径/命令 -->
