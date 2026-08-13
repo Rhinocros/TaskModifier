@@ -111,13 +111,27 @@ jobs:
           name: TaskModifier-windows-${{ matrix.arch_name }}
           path: dist/TaskModifier-windows-${{ matrix.arch_name }}.exe
 
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    if: |
+      startsWith(github.ref, 'refs/tags/') ||
+      (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          pattern: TaskModifier-windows-*
+          merge-multiple: true
+
       - name: Publish to GitHub Release
-        if: |
-          startsWith(github.ref, 'refs/tags/') ||
-          (github.event_name == 'workflow_dispatch' && inputs.create_release == true)
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || (inputs.tag_name != '' && inputs.tag_name || 'latest') }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'TaskModifier Build (Latest)' }}
-          files: dist/TaskModifier-windows-${{ matrix.arch_name }}.exe
+          files: release-assets/*.exe
           generate_release_notes: true
