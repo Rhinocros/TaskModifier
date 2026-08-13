@@ -709,7 +709,7 @@ window.toggleRecurrenceUI = function(prefix = 'custom') {
   const selectedMode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
 
   ['ONCE', 'WEEKLY', 'MONTHLY'].forEach(mode => {
-    const panel = document.getElementById(`${prefix}Panel${selectedMode}`);
+    const panel = document.getElementById(`${prefix}Panel${mode}`);
     if (panel) panel.classList.remove('active');
   });
 
