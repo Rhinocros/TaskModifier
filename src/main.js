@@ -554,7 +554,7 @@ window.initCustomDatePickers = function(container = document) {
     if (wrapper.dataset.pickerInitialized) return;
     wrapper.dataset.pickerInitialized = "true";
     const input = wrapper.querySelector("input");
-    const isDateOnly = input && (input.id === "newHolidayDateInput" || input.classList.contains("holiday-date-input"));
+    const isDateOnly = input && (input.id === "newHolidayDateInput");
     new CustomDateTimePicker(wrapper, { dateOnly: isDateOnly });
   });
 };
@@ -1107,9 +1107,10 @@ function addDateItemToGroup() {
   const input = document.getElementById("dgDateItemInput");
   const val = input ? input.value.trim() : "";
   if (!val) {
-    showCustomAlert("请输入日期 (如: 2026/10/01 或范围: 2026/10/01 ~ 2026/10/07)");
+    showCustomAlert("请输入日期或时刻 (如: 2026/10/01 或 2026/10/01 08:30:00)");
     return;
   }
+  
   if (!editingDateGroupItems.includes(val)) {
     editingDateGroupItems.push(val);
     input.value = "";

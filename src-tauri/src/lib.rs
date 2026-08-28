@@ -154,13 +154,16 @@ pub fn is_date_in_date_groups(
     now_str: &str,      // "YYYY-MM-DD HH:mm:ss"
     groups: &[DateGroup],
     target_group_ids: &[String],
-) -> bool {
+) -> (bool, bool) {
     if target_group_ids.is_empty() {
-        return false;
+        return (false, false);
     }
 
     let now_date = chrono::NaiveDate::parse_from_str(now_date_str, "%Y-%m-%d")
         .or_else(|_| chrono::NaiveDate::parse_from_str(now_date_str, "%Y/%m/%d")).ok();
+
+    let mut is_in_date = false;
+    let mut is_in_time = false;
 
     for group in groups {
         if target_group_ids.contains(&group.id) {
@@ -178,21 +181,31 @@ pub fn is_date_in_date_groups(
                             chrono::NaiveDate::parse_from_str(end_str, "%Y-%m-%d"),
                         ) {
                             if d >= start && d <= end {
-                                return true;
+                                is_in_date = true;
                             }
                         }
                     }
                 } else if trimmed.len() == 10 { // "YYYY-MM-DD"
                     if trimmed == now_date_str {
-                        return true;
+                        is_in_date = true;
                     }
-                } else if trimmed == now_str { // "YYYY-MM-DD HH:mm:ss"
-                    return true;
+                } else if trimmed.len() == 19 { // "YYYY-MM-DD HH:mm:ss"
+                    if let (Ok(target_dt), Ok(now_dt)) = (
+                        chrono::NaiveDateTime::parse_from_str(&trimmed, "%Y-%m-%d %H:%M:%S"),
+                        chrono::NaiveDateTime::parse_from_str(now_str, "%Y-%m-%d %H:%M:%S")
+                    ) {
+                        if target_dt.date() == now_dt.date() && now_dt >= target_dt {
+                            is_in_date = true;
+                            is_in_time = true;
+                        }
+                    }
+                } else if trimmed == now_str { // fallback
+                    is_in_date = true;
                 }
             }
         }
     }
-    false
+    (is_in_date, is_in_time)
 }
 
 fn load_tasks_from_disk() -> Vec<TaskRule> {
@@ -862,7 +875,7 @@ fn start_background_scheduler(
                 let mut tasks = tasks_mutex.lock().unwrap();
                 for task in tasks.iter_mut() {
                     if task.status == "PENDING" {
-                        let is_in_group = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+                        let (is_in_group, _) = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
 
                         // 如果匹配“不触发”特例日期组，则跳过
                         if task.date_group_mode == "EXCLUDE" && is_in_group {
@@ -949,7 +962,7 @@ fn start_background_scheduler(
                         continue;
                     }
 
-                    let is_in_group = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+                    let (is_in_group, is_in_time) = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
 
                     // 如果处于“遇此组不触发”例外，跳过该规则
                     if task.date_group_mode == "EXCLUDE" && is_in_group {
@@ -965,7 +978,9 @@ fn start_background_scheduler(
                         };
                         let force_key = format!("force_group_{}_{}_{}", now_date_str, time_part, task.id);
 
-                        let time_matches = if let Some(ref r) = task.recurrence {
+                        let time_matches = if is_in_time {
+                            true
+                        } else if let Some(ref r) = task.recurrence {
                             if !r.time_of_day.is_empty() {
                                 let current_time_str = now.format("%H:%M:%S").to_string();
                                 let target_t = if r.time_of_day.len() == 5 { format!("{}:00", r.time_of_day) } else { r.time_of_day.clone() };
