@@ -97,8 +97,8 @@
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/your-username/Custom-Scheduled-Tasks.git
-cd Custom-Scheduled-Tasks
+git clone https://github.com/your-username/TaskModifier.git
+cd TaskModifier
 
 # 2. 安装前端/Tauri CLI 依赖
 npm install

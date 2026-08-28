@@ -97,8 +97,8 @@ In daily operations, automated script scheduling, and system management, the sta
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/your-username/Custom-Scheduled-Tasks.git
-cd Custom-Scheduled-Tasks
+git clone https://github.com/your-username/TaskModifier.git
+cd TaskModifier
 
 # 2. Install frontend/Tauri CLI dependencies
 npm install
