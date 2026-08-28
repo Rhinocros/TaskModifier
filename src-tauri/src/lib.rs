@@ -615,6 +615,31 @@ fn delete_date_group(state: tauri::State<'_, AppState>, id: String) -> Result<()
     Ok(())
 }
 
+#[tauri::command]
+fn update_date_group(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    name: String,
+    description: Option<String>,
+    dates: Vec<String>,
+) -> Result<DateGroup, String> {
+    if name.trim().is_empty() {
+        return Err("日期时间组名称不能为空".into());
+    }
+
+    let mut groups = state.date_groups.lock().unwrap();
+    if let Some(group) = groups.iter_mut().find(|g| g.id == id) {
+        group.name = name.trim().to_string();
+        group.description = description.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+        group.dates = dates.into_iter().filter(|s| !s.trim().is_empty()).collect();
+        let cloned = group.clone();
+        save_date_groups_to_disk(&groups);
+        Ok(cloned)
+    } else {
+        Err("找不到指定的日期时间组".into())
+    }
+}
+
 // ----------------- Tauri IPC APIs (标准系统计划任务) -----------------
 #[tauri::command]
 fn get_tasks(state: tauri::State<'_, AppState>) -> Vec<TaskRule> {
@@ -739,6 +764,44 @@ fn add_custom_task(
     save_custom_tasks_to_disk(&tasks);
 
     Ok(rule)
+}
+
+#[tauri::command]
+fn update_custom_task(
+    state: tauri::State<'_, AppState>,
+    id: String,
+    name: String,
+    enable_windows: Vec<TimeWindow>,
+    trigger_datetimes: Vec<String>,
+    executables: Vec<String>,
+    popup_messages: Vec<String>,
+    always_on_top: bool,
+    recurrence: Option<RecurrenceRule>,
+    date_group_ids: Option<Vec<String>>,
+    date_group_mode: Option<String>,
+) -> Result<CustomTaskRule, String> {
+    if name.trim().is_empty() {
+        return Err("自定义任务名称不能为空".into());
+    }
+
+    let mut tasks = state.custom_tasks.lock().unwrap();
+    if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
+        task.name = name.trim().to_string();
+        task.enable_windows = enable_windows;
+        task.trigger_datetimes = trigger_datetimes.into_iter().filter(|s| !s.trim().is_empty()).collect();
+        task.executables = executables.into_iter().filter(|s| !s.trim().is_empty()).collect();
+        task.popup_messages = popup_messages.into_iter().filter(|s| !s.trim().is_empty()).collect();
+        task.always_on_top = always_on_top;
+        task.recurrence = recurrence;
+        task.date_group_ids = date_group_ids.unwrap_or_default();
+        task.date_group_mode = date_group_mode.unwrap_or_else(|| "NONE".into());
+        
+        let updated = task.clone();
+        save_custom_tasks_to_disk(&tasks);
+        Ok(updated)
+    } else {
+        Err("找不到指定自定义任务".into())
+    }
 }
 
 #[tauri::command]
@@ -992,6 +1055,7 @@ pub fn run() {
             execute_task_now,
             get_custom_tasks,
             add_custom_task,
+            update_custom_task,
             delete_custom_task,
             toggle_custom_task,
             execute_custom_task_now,
@@ -1001,6 +1065,7 @@ pub fn run() {
             get_date_groups,
             save_date_groups,
             add_date_group,
+            update_date_group,
             delete_date_group
         ])
         .setup(move |app| {

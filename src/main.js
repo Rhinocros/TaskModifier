@@ -11,8 +11,11 @@ const getTauriCore = () => {
   return null;
 };
 
+import { initI18n, toggleLanguage } from './i18n.js';
+
 let tasks = [];
 let customTasks = [];
+let editingCustomTaskId = null;
 let currentHolidayCal = { holidays: [], workdays: [], updated_at: "" };
 let editingHolidayCal = { holidays: [], workdays: [], updated_at: "" };
 let activeHolidayTab = "holidays";
@@ -922,7 +925,7 @@ window.removeHolidayDate = function(tabType, dateStr) {
   }
 };
 
-async function syncHolidays(silent = false) {
+window.syncHolidays = async function(silent = false) {
   const core = getTauriCore();
   const statusEl = document.getElementById("holidayStatusText");
   if (!core) {
@@ -949,6 +952,7 @@ async function syncHolidays(silent = false) {
 // ----------------- 日期时间组与 Form Sub-Tabs 逻辑 -----------------
 let dateGroups = [];
 let editingDateGroupItems = [];
+let editingDateGroupId = null;
 
 window.switchFormSubTab = function(prefix, tabId) {
   const container = prefix === 'sys' ? document.getElementById('tab-system') : document.getElementById('tab-custom');
@@ -1015,7 +1019,10 @@ function renderDateGroupsList() {
           <span class="group-name">🗓️ ${g.name}</span>
           ${g.description ? `<span class="group-desc"> - ${g.description}</span>` : ''}
         </div>
-        <button type="button" class="icon-btn danger" title="删除该组" onclick="deleteDateGroupItem('${g.id}')">🗑️</button>
+        <div style="display:flex; gap:8px;">
+          <button type="button" class="icon-btn edit" title="编辑该组" onclick="editDateGroupItem('${g.id}')">✏️</button>
+          <button type="button" class="icon-btn danger" title="删除该组" onclick="deleteDateGroupItem('${g.id}')">🗑️</button>
+        </div>
       </div>
       <div class="chips-wrap" style="padding:6px; background:rgba(0,0,0,0.2); border-radius:6px;">
         ${(g.dates || []).map(d => `<span class="holiday-date-chip workday" style="font-size:11px;">📅 ${d}</span>`).join("")}
@@ -1040,6 +1047,25 @@ window.deleteDateGroupItem = async (id) => {
   }
 };
 
+window.editDateGroupItem = (id) => {
+  const group = dateGroups.find(g => g.id === id);
+  if (!group) return;
+
+  editingDateGroupId = id;
+  editingDateGroupItems = [...(group.dates || [])];
+  
+  document.getElementById("dgNameInput").value = group.name;
+  document.getElementById("dgDescInput").value = group.description || "";
+  document.getElementById("dgDateItemInput").value = "";
+  
+  const titleEl = document.querySelector("#createDateGroupCard h4");
+  if (titleEl) {
+    titleEl.innerHTML = "✏️ 编辑日期时间组";
+  }
+  
+  renderNewDgDateItems();
+  document.getElementById("createDateGroupCard").style.display = "block";
+};
 function openDateGroupModal() {
   fetchDateGroups();
   const modal = document.getElementById("dateGroupModalOverlay");
@@ -1047,20 +1073,33 @@ function openDateGroupModal() {
 }
 
 function closeDateGroupModal() {
+  hideCreateDateGroupForm();
   const modal = document.getElementById("dateGroupModalOverlay");
   if (modal) modal.classList.remove("active");
 }
 
 function showCreateDateGroupForm() {
+  editingDateGroupId = null;
   editingDateGroupItems = [];
   document.getElementById("dgNameInput").value = "";
   document.getElementById("dgDescInput").value = "";
   document.getElementById("dgDateItemInput").value = "";
+  
+  const titleEl = document.querySelector("#createDateGroupCard h4");
+  if (titleEl) {
+    titleEl.innerHTML = "➕ 新增日期时间组";
+  }
+  
   renderNewDgDateItems();
   document.getElementById("createDateGroupCard").style.display = "block";
 }
 
 function hideCreateDateGroupForm() {
+  editingDateGroupId = null;
+  editingDateGroupItems = [];
+  document.getElementById("dgNameInput").value = "";
+  document.getElementById("dgDescInput").value = "";
+  document.getElementById("dgDateItemInput").value = "";
   document.getElementById("createDateGroupCard").style.display = "none";
 }
 
@@ -1114,16 +1153,26 @@ async function saveNewDateGroup() {
   if (!core) return;
 
   try {
-    await core.invoke("add_date_group", {
-      name,
-      description: description || null,
-      dates: editingDateGroupItems
-    });
-    appendLog(`已成功创建日期时间组: [${name}]`, "success");
+    if (editingDateGroupId) {
+      await core.invoke("update_date_group", {
+        id: editingDateGroupId,
+        name,
+        description: description || null,
+        dates: editingDateGroupItems
+      });
+      appendLog(`已成功更新日期时间组: [${name}]`, "success");
+    } else {
+      await core.invoke("add_date_group", {
+        name,
+        description: description || null,
+        dates: editingDateGroupItems
+      });
+      appendLog(`已成功创建日期时间组: [${name}]`, "success");
+    }
     hideCreateDateGroupForm();
     fetchDateGroups();
   } catch (err) {
-    appendLog(`创建日期时间组失败: ${err}`, "error");
+    appendLog(`保存日期时间组失败: ${err}`, "error");
     showCustomAlert(`错误: ${err}`);
   }
 }
@@ -1449,35 +1498,210 @@ async function handleAddCustomTask(e) {
   if (!core) return;
 
   try {
-    await core.invoke("add_custom_task", {
-      name,
-      enableWindows,
-      triggerDatetimes: triggerTimes,
-      executables,
-      popupMessages,
-      alwaysOnTop,
-      recurrence,
-      dateGroupIds,
-      dateGroupMode
-    });
+    if (editingCustomTaskId) {
+      await core.invoke("update_custom_task", {
+        id: editingCustomTaskId,
+        name,
+        enableWindows,
+        triggerDatetimes: triggerTimes,
+        executables,
+        popupMessages,
+        alwaysOnTop,
+        recurrence,
+        dateGroupIds,
+        dateGroupMode
+      });
+      appendLog(`已成功更新自主高级任务规则: [${name}]`, "success");
+    } else {
+      await core.invoke("add_custom_task", {
+        name,
+        enableWindows,
+        triggerDatetimes: triggerTimes,
+        executables,
+        popupMessages,
+        alwaysOnTop,
+        recurrence,
+        dateGroupIds,
+        dateGroupMode
+      });
+      const recurLabel = formatRecurrenceText(recurrence);
+      appendLog(`已成功保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
+    }
 
-    const recurLabel = formatRecurrenceText(recurrence);
-    appendLog(`已成功保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
-    customTaskNameInput.value = "";
-    
-    // 清空内部已录入的时间框与程序/弹窗输入
-    document.querySelectorAll("#tab-custom .trigger-time-input").forEach(i => i.value = "");
-    document.querySelectorAll("#tab-custom .window-start-input").forEach(i => i.value = "");
-    document.querySelectorAll("#tab-custom .window-end-input").forEach(i => i.value = "");
-    document.querySelectorAll("#tab-custom .executable-input").forEach(i => i.value = "");
-    document.querySelectorAll("#tab-custom .popup-input").forEach(i => i.value = "");
-
+    cancelEditCustomTask();
     fetchCustomTasks();
   } catch (err) {
     appendLog(`保存自主高级任务失败: ${err}`, "error");
     showCustomAlert(`保存失败: ${err}`);
   }
 }
+
+window.editCustomTask = (id) => {
+  const task = customTasks.find(t => t.id === id);
+  if (!task) return;
+
+  editingCustomTaskId = id;
+  customTaskNameInput.value = task.name || "";
+  customAlwaysOnTopInput.checked = task.always_on_top;
+
+  // Restore recurrence
+  if (task.recurrence) {
+    const r = task.recurrence;
+    const modeRadio = document.querySelector(`input[name="customRecurrenceMode"][value="${r.mode}"]`);
+    if (modeRadio) {
+      modeRadio.checked = true;
+      toggleRecurrenceUI('custom');
+    }
+    
+    if (r.mode === "WEEKLY") {
+      document.querySelectorAll(`#customWeekdaysWrap input[type="checkbox"]`).forEach(cb => {
+        cb.checked = (r.days_of_week || []).includes(parseInt(cb.value));
+      });
+    } else if (r.mode === "MONTHLY") {
+      document.querySelectorAll(`#customMonthdaysWrap input[type="checkbox"]`).forEach(cb => {
+        cb.checked = (r.days_of_month || []).includes(parseInt(cb.value));
+      });
+    }
+    
+    const timeOfDayInput = document.getElementById(`customTimeOfDay`);
+    if (timeOfDayInput && r.time_of_day) {
+      timeOfDayInput.value = r.time_of_day;
+    }
+  } else {
+    const modeRadio = document.querySelector(`input[name="customRecurrenceMode"][value="ONCE"]`);
+    if (modeRadio) {
+      modeRadio.checked = true;
+      toggleRecurrenceUI('custom');
+    }
+  }
+
+  // Restore enableWindows
+  enableWindowsContainer.innerHTML = '';
+  if (task.enable_windows && task.enable_windows.length > 0) {
+    task.enable_windows.forEach(w => {
+      addEnableWindowRow();
+      const rows = enableWindowsContainer.querySelectorAll(".multi-window-row");
+      const lastRow = rows[rows.length - 1];
+      if (w.start_time) lastRow.querySelector(".window-start-input").value = w.start_time.replace(/-/g, '/');
+      if (w.end_time) lastRow.querySelector(".window-end-input").value = w.end_time.replace(/-/g, '/');
+    });
+  } else if (task.enable_window_start || task.enable_window_end) {
+    addEnableWindowRow();
+    const rows = enableWindowsContainer.querySelectorAll(".multi-window-row");
+    const lastRow = rows[rows.length - 1];
+    if (task.enable_window_start) lastRow.querySelector(".window-start-input").value = task.enable_window_start.replace(/-/g, '/');
+    if (task.enable_window_end) lastRow.querySelector(".window-end-input").value = task.enable_window_end.replace(/-/g, '/');
+  } else {
+    addEnableWindowRow();
+  }
+
+  // Restore triggerDatetimes
+  triggerTimesContainer.innerHTML = '';
+  if (task.trigger_datetimes && task.trigger_datetimes.length > 0) {
+    task.trigger_datetimes.forEach(t => {
+      addTriggerTimeRow();
+      const rows = triggerTimesContainer.querySelectorAll(".multi-input-row");
+      const lastRow = rows[rows.length - 1];
+      lastRow.querySelector(".trigger-time-input").value = t.replace(/-/g, '/');
+    });
+  } else {
+    addTriggerTimeRow();
+  }
+
+  // Restore executables
+  executablesContainer.innerHTML = '';
+  if (task.executables && task.executables.length > 0) {
+    task.executables.forEach(e => {
+      addExecutableRow();
+      const rows = executablesContainer.querySelectorAll(".multi-input-row");
+      const lastRow = rows[rows.length - 1];
+      lastRow.querySelector(".executable-input").value = e;
+    });
+  } else {
+    addExecutableRow();
+  }
+
+  // Restore popupMessages
+  popupsContainer.innerHTML = '';
+  if (task.popup_messages && task.popup_messages.length > 0) {
+    task.popup_messages.forEach(m => {
+      addPopupRow();
+      const rows = popupsContainer.querySelectorAll(".multi-input-row");
+      const lastRow = rows[rows.length - 1];
+      lastRow.querySelector(".popup-input").value = m;
+    });
+  } else {
+    addPopupRow();
+  }
+
+  // Restore DateGroups
+  document.querySelectorAll('input[name="customDateGroupId"]').forEach(cb => cb.checked = false);
+  if (task.date_group_ids && task.date_group_ids.length > 0) {
+    task.date_group_ids.forEach(gid => {
+      const cb = document.querySelector(`input[name="customDateGroupId"][value="${gid}"]`);
+      if (cb) cb.checked = true;
+    });
+  }
+
+  const mode = task.date_group_mode || "NONE";
+  const dgModeRadio = document.querySelector(`input[name="customDateGroupMode"][value="${mode}"]`);
+  if (dgModeRadio) dgModeRadio.checked = true;
+
+  // Change submit button and add cancel button
+  const submitBtn = document.getElementById("submitCustomBtn");
+  submitBtn.innerHTML = "<span>更新自主高级规则</span>";
+  
+  let cancelBtn = document.getElementById("cancelEditCustomBtn");
+  if (!cancelBtn) {
+    cancelBtn = document.createElement("button");
+    cancelBtn.id = "cancelEditCustomBtn";
+    cancelBtn.type = "button";
+    cancelBtn.className = "modal-btn secondary";
+    cancelBtn.style.marginTop = "12px";
+    cancelBtn.style.marginLeft = "8px";
+    cancelBtn.innerHTML = "<span>取消编辑</span>";
+    cancelBtn.onclick = cancelEditCustomTask;
+    submitBtn.parentNode.insertBefore(cancelBtn, submitBtn.nextSibling);
+  }
+  cancelBtn.style.display = "inline-flex";
+  
+  // Switch to custom tab and scroll to top
+  document.querySelector('.tab-btn[data-tab="tab-custom"]').click();
+  document.querySelector('.app-container').scrollTop = 0;
+};
+
+window.cancelEditCustomTask = () => {
+  editingCustomTaskId = null;
+  customTaskNameInput.value = "";
+  customAlwaysOnTopInput.checked = true;
+
+  const modeRadio = document.querySelector(`input[name="customRecurrenceMode"][value="ONCE"]`);
+  if (modeRadio) {
+    modeRadio.checked = true;
+    toggleRecurrenceUI('custom');
+  }
+
+  enableWindowsContainer.innerHTML = '';
+  addEnableWindowRow();
+
+  triggerTimesContainer.innerHTML = '';
+  addTriggerTimeRow();
+
+  executablesContainer.innerHTML = '';
+  addExecutableRow();
+
+  popupsContainer.innerHTML = '';
+  addPopupRow();
+
+  document.querySelectorAll('input[name="customDateGroupId"]').forEach(cb => cb.checked = false);
+  const dgModeRadio = document.querySelector(`input[name="customDateGroupMode"][value="NONE"]`);
+  if (dgModeRadio) dgModeRadio.checked = true;
+
+  const submitBtn = document.getElementById("submitCustomBtn");
+  submitBtn.innerHTML = "<span>保存自主高级规则</span>";
+  const cancelBtn = document.getElementById("cancelEditCustomBtn");
+  if (cancelBtn) cancelBtn.style.display = "none";
+};
 
 window.toggleCustomTaskStatus = async (id, isEnabled) => {
   const core = getTauriCore();
@@ -1571,6 +1795,7 @@ function renderCustomTaskList() {
         </div>
 
         <div class="task-actions">
+          <button class="icon-btn" title="编辑规则" onclick="editCustomTask('${task.id}')">✏️</button>
           <button class="icon-btn" title="即时测试触发" onclick="testExecuteCustomTaskNow('${task.id}')">⚡</button>
           <button class="icon-btn danger" title="删除规则" onclick="deleteCustomTaskItem('${task.id}')">🗑️</button>
         </div>
@@ -1638,6 +1863,12 @@ window.addEventListener("DOMContentLoaded", () => {
   if (hideCreateDgBtn) hideCreateDgBtn.addEventListener("click", hideCreateDateGroupForm);
   if (addDgDateBtn) addDgDateBtn.addEventListener("click", addDateItemToGroup);
   if (saveDgBtn) saveDgBtn.addEventListener("click", saveNewDateGroup);
+  const langToggleBtn = document.getElementById("langToggleBtn");
+  if (langToggleBtn) langToggleBtn.addEventListener("click", toggleLanguage);
+  
+  if (syncHolidaysBtn) syncHolidaysBtn.addEventListener("click", openHolidayModal);
+  
+  initI18n();
 
   addRuleForm.addEventListener("submit", handleAddTask);
   addCustomRuleForm.addEventListener("submit", handleAddCustomTask);

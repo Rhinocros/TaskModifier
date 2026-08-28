@@ -1,0 +1,68 @@
+[
+  {
+    "id": "custom_1724773200001",
+    "name": "测试任务1 - 每天中午提醒吃饭",
+    "is_enabled": true,
+    "enable_window_start": null,
+    "enable_window_end": null,
+    "enable_windows": [],
+    "trigger_datetimes": [],
+    "executables": [],
+    "popup_messages": ["该吃饭了！", "放下手中的活，去吃饭！"],
+    "always_on_top": true,
+    "triggered_history": [],
+    "created_at": "2026-08-27 12:00:00",
+    "recurrence": {
+      "mode": "DAILY",
+      "days_of_week": [],
+      "days_of_month": [],
+      "time_of_day": "12:00:00"
+    },
+    "date_group_ids": [],
+    "date_group_mode": "NONE"
+  },
+  {
+    "id": "custom_1724773200002",
+    "name": "测试任务2 - 工作日拉起微信和网易云",
+    "is_enabled": true,
+    "enable_window_start": null,
+    "enable_window_end": null,
+    "enable_windows": [],
+    "trigger_datetimes": [],
+    "executables": ["WeChat.exe", "cloudmusic.exe"],
+    "popup_messages": [],
+    "always_on_top": false,
+    "triggered_history": [],
+    "created_at": "2026-08-27 12:05:00",
+    "recurrence": {
+      "mode": "WORKDAY",
+      "days_of_week": [],
+      "days_of_month": [],
+      "time_of_day": "09:00:00"
+    },
+    "date_group_ids": [],
+    "date_group_mode": "NONE"
+  },
+  {
+    "id": "custom_1724773200003",
+    "name": "测试任务3 - 周末不规则触发",
+    "is_enabled": false,
+    "enable_window_start": null,
+    "enable_window_end": null,
+    "enable_windows": [],
+    "trigger_datetimes": ["2026-08-29 10:00:00", "2026-08-30 15:30:00"],
+    "executables": ["mspaint.exe"],
+    "popup_messages": ["周末画画时间！"],
+    "always_on_top": true,
+    "triggered_history": [],
+    "created_at": "2026-08-27 12:10:00",
+    "recurrence": {
+      "mode": "ONCE",
+      "days_of_week": [],
+      "days_of_month": [],
+      "time_of_day": ""
+    },
+    "date_group_ids": [],
+    "date_group_mode": "NONE"
+  }
+]

@@ -117,7 +117,7 @@ body {
   font-weight: 500;
   cursor: pointer;
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   white-space: nowrap;
   flex-shrink: 0;
@@ -1027,6 +1027,14 @@ input:checked + .slider:before {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
+}
+
+#customModalOverlay {
+  z-index: 10000;
+}
+
+#topmostModalOverlay {
+  z-index: 10001;
 }
 
 .modal-overlay.active {
