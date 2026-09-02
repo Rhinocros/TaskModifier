@@ -194,9 +194,11 @@ pub fn is_date_in_date_groups(
                         chrono::NaiveDateTime::parse_from_str(&trimmed, "%Y-%m-%d %H:%M:%S"),
                         chrono::NaiveDateTime::parse_from_str(now_str, "%Y-%m-%d %H:%M:%S")
                     ) {
-                        if target_dt.date() == now_dt.date() && now_dt >= target_dt {
+                        if target_dt.date() == now_dt.date() {
                             is_in_date = true;
-                            is_in_time = true;
+                            if now_dt >= target_dt {
+                                is_in_time = true;
+                            }
                         }
                     }
                 } else if trimmed == now_str { // fallback
@@ -432,6 +434,66 @@ fn execute_schtasks(task_name: &str, action: &str) -> Result<String, String> {
     Err(format!("修改失败: {}", msg1))
 }
 
+/// 解析命令行字符串，返回 (可执行文件路径, 参数列表)
+fn parse_command_line(cmd: &str) -> (String, Vec<String>) {
+    let cmd = cmd.trim();
+    if cmd.is_empty() {
+        return (String::new(), Vec::new());
+    }
+
+    // 若命令以引号开头，路径是第一对引号内的内容
+    if cmd.starts_with('"') {
+        if let Some(end_quote) = cmd[1..].find('"') {
+            let exe = cmd[1..=end_quote].to_string();
+            let rest = cmd[end_quote + 2..].trim();
+            let args = parse_args(rest);
+            return (exe, args);
+        }
+    }
+
+    // 否则以第一个空格分割
+    if let Some(space_pos) = cmd.find(' ') {
+        let exe = cmd[..space_pos].to_string();
+        let rest = cmd[space_pos + 1..].trim();
+        let args = parse_args(rest);
+        return (exe, args);
+    }
+
+    // 没有参数
+    (cmd.to_string(), Vec::new())
+}
+
+/// 简单解析参数字符串，支持带引号的参数
+/// 引号用于标识包含空格的参数，解析后的参数中不包含引号字符
+fn parse_args(args_str: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    let mut chars = args_str.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => {
+                // 切换引号状态，但不将引号字符写入参数
+                in_quotes = !in_quotes;
+            }
+            ' ' if !in_quotes => {
+                if !current.is_empty() {
+                    args.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => {
+                current.push(ch);
+            }
+        }
+    }
+    if !current.is_empty() {
+        args.push(current);
+    }
+    args
+}
+
 fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskRule) {
     for exe in &task.executables {
         let exe_str = exe.trim().to_string();
@@ -440,11 +502,16 @@ fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskR
                 #[cfg(target_os = "windows")]
                 {
                     use std::os::windows::process::CommandExt;
+                    // DETACHED_PROCESS: 脱离当前控制台
+                    // CREATE_NO_WINDOW: 不创建新控制台窗口
                     const CREATE_NO_WINDOW: u32 = 0x08000000;
-                    let _ = Command::new("cmd")
-                        .args(["/C", &exe_str])
-                        .creation_flags(CREATE_NO_WINDOW)
-                        .spawn();
+                    let (prog, args) = parse_command_line(&exe_str);
+                    if !prog.is_empty() {
+                        let _ = Command::new(&prog)
+                            .args(&args)
+                            .creation_flags(CREATE_NO_WINDOW)
+                            .spawn();
+                    }
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
@@ -848,6 +915,50 @@ fn execute_custom_task_now(app_handle: tauri::AppHandle, state: tauri::State<'_,
     }
 }
 
+/// 弹出 Windows 文件选择对话框，让用户选择一个可执行程序，返回完整路径
+#[tauri::command]
+fn browse_executable() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        // 使用 PowerShell 弹出文件选择对话框
+        let script = r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dlg = New-Object System.Windows.Forms.OpenFileDialog
+$dlg.Title = '选择可执行程序'
+$dlg.Filter = '可执行文件 (*.exe)|*.exe|所有文件 (*.*)|*.*'
+$dlg.FilterIndex = 1
+$dlg.Multiselect = $false
+if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+    Write-Output $dlg.FileName
+} else {
+    Write-Output ''
+}
+"#;
+
+        let output = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle", "Hidden",
+                "-Command", script,
+            ])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("启动 PowerShell 失败: {}", e))?;
+
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        Ok(path)
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅支持 Windows 平台".into())
+    }
+}
+
 // ----------------- 后台高精度到期轮询任务 -----------------
 fn start_background_scheduler(
     app_handle: tauri::AppHandle,
@@ -1081,7 +1192,8 @@ pub fn run() {
             save_date_groups,
             add_date_group,
             update_date_group,
-            delete_date_group
+            delete_date_group,
+            browse_executable
         ])
         .setup(move |app| {
             let handle = app.handle().clone();

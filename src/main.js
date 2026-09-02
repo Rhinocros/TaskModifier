@@ -681,6 +681,7 @@ window.addExecutableRow = () => {
   row.className = "multi-input-row";
   row.innerHTML = `
     <input type="text" class="executable-input" placeholder='例如: PotPlayerMini64.exe "D:\\视频.dpl" /autoplay /fullscreen' />
+    <button type="button" class="browse-btn" onclick="browseExecutableForRow(this)" title="浏览选择程序">📂</button>
     <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
   `;
   executablesContainer.appendChild(row);
@@ -694,6 +695,35 @@ window.addPopupRow = () => {
     <button type="button" class="remove-btn" onclick="removeMultiInputRow(this)">✕</button>
   `;
   popupsContainer.appendChild(row);
+};
+
+// 点击浏览按钮，调用后端弹出文件选择对话框，将结果填入当前行的输入框
+window.browseExecutableForRow = async (btn) => {
+  const core = getTauriCore();
+  if (!core) {
+    showCustomAlert("当前环境不支持文件浏览功能");
+    return;
+  }
+  try {
+    btn.disabled = true;
+    btn.textContent = "⏳";
+    const path = await core.invoke("browse_executable");
+    if (path && path.trim().length > 0) {
+      const row = btn.closest(".multi-input-row");
+      if (row) {
+        const input = row.querySelector(".executable-input");
+        if (input) {
+          // 如果路径包含空格，自动加引号
+          input.value = path.includes(" ") ? `"${path}"` : path;
+        }
+      }
+    }
+  } catch (err) {
+    appendLog(`浏览文件失败: ${err}`, "error");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "📂";
+  }
 };
 
 // ----------------- 自主任务循环周期 UI 交互 -----------------
@@ -1898,7 +1928,10 @@ window.addEventListener("DOMContentLoaded", () => {
     window.__TAURI__.event.listen("custom_task_triggered", (event) => {
       const payload = event.payload;
       appendLog(`自主高级任务到期触发: [${payload.task_name}]`, "success");
-      showTopmostTriggerAlert(payload);
+      // 仅在勾选了置顶弹窗，或配置了弹窗消息时才显示弹窗
+      if (payload.always_on_top || (payload.popup_messages && payload.popup_messages.length > 0)) {
+        showTopmostTriggerAlert(payload);
+      }
       fetchCustomTasks();
     });
   }
