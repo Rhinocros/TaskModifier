@@ -522,13 +522,13 @@ fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskR
     }
 
     use tauri::Manager;
-    if let Some(window) = app_handle.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        if task.always_on_top {
+    if task.always_on_top {
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.show();
+            let _ = window.unminimize();
             let _ = window.set_always_on_top(true);
+            let _ = window.set_focus();
         }
-        let _ = window.set_focus();
     }
 
     #[derive(Serialize, Clone)]
