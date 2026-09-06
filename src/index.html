@@ -132,15 +132,15 @@
                 <label class="radio-card warning">
                   <input type="radio" name="sysDateGroupMode" value="EXCLUDE" />
                   <div>
-                    <span class="title">🚫 遇选中日期组：不触发 (例外排除)</span>
-                    <span class="desc">即便达到到期时刻，若落在选中日期组内也跳过不修改。</span>
+                    <span class="title">🚫 遇选中日期组：不触发 (当天跳过)</span>
+                    <span class="desc">落在选中日期组的日期，当天全天跳过不修改，到期自动标记已跳过。</span>
                   </div>
                 </label>
                 <label class="radio-card success">
                   <input type="radio" name="sysDateGroupMode" value="FORCE_TRIGGER" />
                   <div>
                     <span class="title">⚡ 遇选中日期组：特例/临时触发</span>
-                    <span class="desc">只要处于选中日期组的日期，立即临时触发目标状态修改。</span>
+                    <span class="desc">严格按日期组设定的日期和时间触发（未设时间按目标时刻触发）。</span>
                   </div>
                 </label>
               </div>
@@ -277,10 +277,11 @@
                   </div>
                 </div>
 
-                <!-- 循环时间时刻选择器 (非ONCE模式使用) -->
+                <!-- 循环与特例执行时刻选择器 -->
                 <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
-                  <label for="customTimeOfDay">每日触发时刻 (HH:mm:ss)</label>
+                  <label for="customTimeOfDay">任务执行时刻 (HH:mm:ss)</label>
                   <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius:6px; color:#fff;" />
+                  <span class="help-text" style="font-size:11px; color:var(--text-muted);">循环模式或特例日期组生效时，任务线程到达此精确时刻触发执行</span>
                 </div>
               </div>
             </div>
@@ -335,24 +336,24 @@
               <label>特例处理规则</label>
               <div class="radio-stack">
                 <label class="radio-card">
-                  <input type="radio" name="customDateGroupMode" value="NONE" checked />
+                  <input type="radio" name="customDateGroupMode" value="NONE" checked onchange="toggleRecurrenceUI('custom')" />
                   <div>
-                    <span class="title">⚪ 正常规则 (不使用日期组特例)</span>
-                    <span class="desc">完全按照循环模式或指定具体时间正常评估触发。</span>
+                    <span class="title">⚪ 正常规则 (不使用日期组)</span>
+                    <span class="desc">完全按照任务自身的循环模式或指定时间正常触发。</span>
                   </div>
                 </label>
                 <label class="radio-card warning">
-                  <input type="radio" name="customDateGroupMode" value="EXCLUDE" />
+                  <input type="radio" name="customDateGroupMode" value="EXCLUDE" onchange="toggleRecurrenceUI('custom')" />
                   <div>
-                    <span class="title">🚫 遇选中日期组：不触发 (例外排除)</span>
-                    <span class="desc">即便是正常的循环工作日或指定时间，落在该组日期时也跳过不触发。</span>
+                    <span class="title">🚫 遇选中日期组：不触发 (当天跳过)</span>
+                    <span class="desc">任务线程控制：若今日属于所选日期组，今日全天彻底跳过不执行。</span>
                   </div>
                 </label>
                 <label class="radio-card success">
-                  <input type="radio" name="customDateGroupMode" value="FORCE_TRIGGER" />
+                  <input type="radio" name="customDateGroupMode" value="FORCE_TRIGGER" onchange="toggleRecurrenceUI('custom')" />
                   <div>
-                    <span class="title">⚡ 遇选中日期组：特例/临时触发</span>
-                    <span class="desc">平时不触发的日期（如休息日/非循环日），遇此组日期时强制特例触发。</span>
+                    <span class="title">⚡ 遇选中日期组：特例生效触发</span>
+                    <span class="desc">任务线程控制：若今日属于所选日期组，在任务设定的时刻执行。多个任务可共享同一日期组并在各自时间独立运行。</span>
                   </div>
                 </label>
               </div>
@@ -406,6 +407,17 @@
             <div class="empty-state">
               <p>暂无自主高级任务，请在左侧配置并保存规则</p>
             </div>
+          </div>
+        </div>
+
+        <!-- Logs Card -->
+        <div class="card logs-card">
+          <div class="card-header">
+            <h2><span class="icon">💻</span> 调度日志终端</h2>
+            <button class="text-btn" onclick="clearLogs()">清空日志</button>
+          </div>
+          <div class="log-terminal" id="logTerminalCustom">
+            <div class="log-entry system">[系统准备就绪] 自主高级任务监视器已在后台运行...</div>
           </div>
         </div>
       </section>
@@ -500,7 +512,7 @@
           <div class="modal-icon-box warning" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🗓️</div>
           <div>
             <h3 class="modal-title">自定义日期时间组管理</h3>
-            <span style="font-size:11px; color:#a1a1aa;">设置规则时可关联这些日期组，配置不触发或特例触发</span>
+            <span style="font-size:11px; color:#a1a1aa;">可设置日期、具体时刻或日期区间，供多个任务共享读取引用</span>
           </div>
         </div>
         <button type="button" class="add-btn" id="showCreateGroupBtn">+ 新建日期时间组</button>
@@ -516,7 +528,7 @@
             
             <div style="display:flex; gap:8px;">
               <div class="custom-datetime-wrapper" style="flex:1;">
-                <input type="text" id="dgDateItemInput" placeholder="添加日期或具体时刻 (例: 2026/10/01 08:30:00)" class="holiday-date-input" style="width:100%;" />
+                <input type="text" id="dgDateItemInput" placeholder="添加日期与时间 (例: 2026/10/01 08:30:00 或 2026/10/01 ~ 2026/10/07)" class="holiday-date-input" style="width:100%;" />
               </div>
               <button type="button" class="preset-btn" id="addDgDateItemBtn" style="white-space: nowrap;">+ 添加到本组</button>
             </div>

@@ -621,16 +621,22 @@ window.setPresetOffset = (minutes) => {
 
 // 日志输出
 function appendLog(message, type = "info") {
-  const entry = document.createElement("div");
-  entry.className = `log-entry ${type}`;
+  const terminals = [document.getElementById("logTerminal"), document.getElementById("logTerminalCustom")].filter(Boolean);
   const nowStr = getFormattedNowTime();
-  entry.textContent = `[${nowStr}] ${message}`;
-  logTerminal.appendChild(entry);
-  logTerminal.scrollTop = logTerminal.scrollHeight;
+  terminals.forEach(terminal => {
+    const entry = document.createElement("div");
+    entry.className = `log-entry ${type}`;
+    entry.textContent = `[${nowStr}] ${message}`;
+    terminal.appendChild(entry);
+    terminal.scrollTop = terminal.scrollHeight;
+  });
 }
 
 window.clearLogs = () => {
-  logTerminal.innerHTML = `<div class="log-entry system">[已清空历史日志]</div>`;
+  const terminals = [document.getElementById("logTerminal"), document.getElementById("logTerminalCustom")].filter(Boolean);
+  terminals.forEach(terminal => {
+    terminal.innerHTML = `<div class="log-entry system">[已清空历史日志]</div>`;
+  });
 };
 
 // ----------------- 多行输入框增删 -----------------
@@ -740,6 +746,7 @@ window.initMonthdaysOptions = function() {
 
 window.toggleRecurrenceUI = function(prefix = 'custom') {
   const selectedMode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
+  const dgMode = document.querySelector(`input[name="${prefix}DateGroupMode"]:checked`)?.value || "NONE";
 
   ['ONCE', 'WEEKLY', 'MONTHLY'].forEach(mode => {
     const panel = document.getElementById(`${prefix}Panel${mode}`);
@@ -751,7 +758,8 @@ window.toggleRecurrenceUI = function(prefix = 'custom') {
 
   const timeGroup = document.getElementById(`${prefix}TimeOfDayGroup`);
   if (timeGroup) {
-    timeGroup.style.display = selectedMode === "ONCE" ? "none" : "flex";
+    // 无论是常规循环，还是特例日期组生效触发，只要需要定时触发，就展示任务执行时刻输入框
+    timeGroup.style.display = (selectedMode === "ONCE" && dgMode !== "FORCE_TRIGGER") ? "none" : "flex";
   }
 };
 
@@ -776,11 +784,22 @@ window.selectMonthdays = function(prefix, type) {
 
 function getRecurrenceRuleFromUI(prefix = 'custom') {
   const mode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
-  if (mode === "ONCE") return null;
-
+  const dgMode = document.querySelector(`input[name="${prefix}DateGroupMode"]:checked`)?.value || "NONE";
   const timeOfDayInput = document.getElementById(`${prefix}TimeOfDay`);
   let time_of_day = timeOfDayInput ? timeOfDayInput.value : "09:00:00";
   if (time_of_day && time_of_day.length === 5) time_of_day += ":00";
+
+  if (mode === "ONCE") {
+    if (dgMode === "FORCE_TRIGGER") {
+      return {
+        mode: "ONCE",
+        days_of_week: [],
+        days_of_month: [],
+        time_of_day: time_of_day || "09:00:00"
+      };
+    }
+    return null;
+  }
 
   let days_of_week = [];
   if (mode === "WEEKLY") {
@@ -803,8 +822,11 @@ function getRecurrenceRuleFromUI(prefix = 'custom') {
 }
 
 function formatRecurrenceText(rule) {
-  if (!rule || rule.mode === "ONCE") return "";
+  if (!rule) return "";
   const timeStr = rule.time_of_day || "";
+  if (rule.mode === "ONCE") {
+    return timeStr ? `特例时刻: ${timeStr}` : "";
+  }
 
   if (rule.mode === "DAILY") {
     return `🔄 每天 ${timeStr}`;
@@ -1260,6 +1282,11 @@ async function handleAddTask(e) {
   const dateGroupIds = Array.from(checkedGroupCbs).map(cb => cb.value);
   const dateGroupMode = document.querySelector('input[name="sysDateGroupMode"]:checked')?.value || "NONE";
 
+  if (dateGroupMode !== "NONE" && dateGroupIds.length === 0) {
+    showCustomAlert("您已选择特例日期组模式（跳过或强制触发），请勾选至少一个日期时间组！");
+    return;
+  }
+
   const core = getTauriCore();
   if (!core) return;
 
@@ -1348,7 +1375,8 @@ function renderTaskList() {
   taskListContainer.innerHTML = tasks.map(task => {
     const isPending = task.status === "PENDING";
     const statusText = task.status === "PENDING" ? "⏳ 等待到期" :
-                       task.status === "SUCCESS" ? "✅ 执行成功" : "❌ 执行失败";
+                       task.status === "SUCCESS" ? "✅ 执行成功" :
+                       task.status === "SKIPPED" ? "🚫 已跳过 (例外组)" : "❌ 执行失败";
     const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode);
 
     return `
@@ -1375,23 +1403,65 @@ function renderTaskList() {
   }).join("");
 }
 
+function isDateExcludedInGroups(dateObj, groupIds) {
+  if (!groupIds || groupIds.length === 0 || !Array.isArray(dateGroups)) return false;
+  const y = dateObj.getFullYear();
+  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
+  const d = String(dateObj.getDate()).padStart(2, '0');
+  const targetDateStr = `${y}-${m}-${d}`;
+  const targetTimestamp = new Date(y, dateObj.getMonth(), dateObj.getDate()).getTime();
+
+  for (const gid of groupIds) {
+    const group = dateGroups.find(g => (g.id || '').trim().toLowerCase() === (gid || '').trim().toLowerCase());
+    if (!group || !group.dates) continue;
+    for (const item of group.dates) {
+      const trimmed = item.trim().replace(/\//g, "-");
+      const rangeSplit = trimmed.includes("~") ? trimmed.split("~") :
+                         trimmed.includes("至") ? trimmed.split("至") :
+                         trimmed.includes("到") ? trimmed.split("到") :
+                         trimmed.includes(" - ") ? trimmed.split(" - ") : null;
+      if (rangeSplit && rangeSplit.length === 2) {
+        const s = parseCustomDate(rangeSplit[0].trim());
+        const e = parseCustomDate(rangeSplit[1].trim());
+        if (s && e) {
+          const sTime = new Date(s.getFullYear(), s.getMonth(), s.getDate()).getTime();
+          const eTime = new Date(e.getFullYear(), e.getMonth(), e.getDate()).getTime();
+          if (targetTimestamp >= sTime && targetTimestamp <= eTime) return true;
+        }
+      } else {
+        const itemDate = parseCustomDate(trimmed);
+        if (itemDate) {
+          const itemY = itemDate.getFullYear();
+          const itemM = String(itemDate.getMonth() + 1).padStart(2, '0');
+          const itemD = String(itemDate.getDate()).padStart(2, '0');
+          if (`${itemY}-${itemM}-${itemD}` === targetDateStr) return true;
+        }
+      }
+    }
+  }
+  return false;
+}
+
 // ----------------- Tab 2: 高级自主任务引擎逻辑 -----------------
 function getNextTriggerDateForCustomTask(task) {
-  const candidates = [];
+  let candidates = [];
   const now = new Date();
   const nowTime = now.getTime();
+  const isExcludeMode = task.date_group_mode === "EXCLUDE" && task.date_group_ids && task.date_group_ids.length > 0;
 
   // 1. 检查不规则固定时刻
   if (task.trigger_datetimes && task.trigger_datetimes.length > 0) {
     for (const dtStr of task.trigger_datetimes) {
       const dt = parseCustomDate(dtStr);
       if (dt && dt.getTime() > nowTime) {
-        candidates.push(dt);
+        if (!isExcludeMode || !isDateExcludedInGroups(dt, task.date_group_ids)) {
+          candidates.push(dt);
+        }
       }
     }
   }
 
-  // 2. 检查循环规则
+  // 2. 检查循环规则（跳过被排除日，自动向后寻找下一可用执行日）
   if (task.recurrence && task.recurrence.mode !== "ONCE") {
     const rule = task.recurrence;
     const timeOfDay = rule.time_of_day || "09:00:00";
@@ -1443,13 +1513,71 @@ function getNextTriggerDateForCustomTask(task) {
       if (isMatch) {
         const candidateDate = new Date(year, month - 1, dateNum, h, m, s);
         if (candidateDate.getTime() > nowTime) {
-          candidates.push(candidateDate);
-          break;
+          // 若当天落在排除组，不能作为下次执行候选，继续寻找下一天
+          if (isExcludeMode && isDateExcludedInGroups(candidateDate, task.date_group_ids)) {
+            // 继续向下搜索
+          } else {
+            candidates.push(candidateDate);
+            break;
+          }
         }
       }
 
       testDate.setDate(testDate.getDate() + 1);
     }
+  }
+
+  // 3. 检查特例触发组 (FORCE_TRIGGER)：精确提取组内设定的日期和时间
+  if (task.date_group_mode === "FORCE_TRIGGER" && task.date_group_ids && task.date_group_ids.length > 0 && Array.isArray(dateGroups)) {
+    const defaultTime = (task.recurrence && task.recurrence.time_of_day) ? task.recurrence.time_of_day : "09:00:00";
+    const parts = defaultTime.split(":");
+    const defH = parseInt(parts[0] || "0");
+    const defM = parseInt(parts[1] || "0");
+    const defS = parseInt(parts[2] || "0");
+
+    for (const gid of task.date_group_ids) {
+      const group = dateGroups.find(g => (g.id || '').trim().toLowerCase() === (gid || '').trim().toLowerCase());
+      if (!group || !group.dates) continue;
+      for (const item of group.dates) {
+        const trimmed = item.trim().replace(/\//g, "-");
+        const rangeSplit = trimmed.includes("~") ? trimmed.split("~") :
+                           trimmed.includes("至") ? trimmed.split("至") :
+                           trimmed.includes("到") ? trimmed.split("到") :
+                           trimmed.includes(" - ") ? trimmed.split(" - ") : null;
+        if (rangeSplit && rangeSplit.length === 2) {
+          const s = parseCustomDate(rangeSplit[0].trim());
+          const e = parseCustomDate(rangeSplit[1].trim());
+          if (s && e) {
+            const cur = new Date(Math.max(now.getTime(), new Date(s.getFullYear(), s.getMonth(), s.getDate()).getTime()));
+            const endLimit = new Date(e.getFullYear(), e.getMonth(), e.getDate(), 23, 59, 59).getTime();
+            while (cur.getTime() <= endLimit) {
+              const cand = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate(), defH, defM, defS);
+              if (cand.getTime() > nowTime) {
+                candidates.push(cand);
+                break;
+              }
+              cur.setDate(cur.getDate() + 1);
+            }
+          }
+        } else {
+          const itemDate = parseCustomDate(trimmed);
+          if (itemDate) {
+            const hasExplicitTime = (trimmed.includes(" ") || trimmed.includes("T")) && (trimmed.split(/[\sT]/)[1] || "").includes(":");
+            const cand = hasExplicitTime
+              ? itemDate
+              : new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), defH, defM, defS);
+            if (cand.getTime() > nowTime) {
+              candidates.push(cand);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // 4. 双重过滤排除组（EXCLUDE）
+  if (isExcludeMode) {
+    candidates = candidates.filter(cand => !isDateExcludedInGroups(cand, task.date_group_ids));
   }
 
   if (candidates.length === 0) return null;
@@ -1500,6 +1628,11 @@ async function handleAddCustomTask(e) {
   const checkedGroupCbs = document.querySelectorAll('input[name="customDateGroupId"]:checked');
   const dateGroupIds = Array.from(checkedGroupCbs).map(cb => cb.value);
   const dateGroupMode = document.querySelector('input[name="customDateGroupMode"]:checked')?.value || "NONE";
+
+  if (dateGroupMode !== "NONE" && dateGroupIds.length === 0) {
+    showCustomAlert("您已选择特例日期组模式（跳过或强制触发），请勾选至少一个日期时间组！");
+    return;
+  }
 
   if (!recurrence && triggerTimes.length === 0 && dateGroupMode !== "FORCE_TRIGGER") {
     showCustomAlert("请设置定时循环周期（如每天、每周、工作日）、具体不规则触发时间或特例强制触发规则");
@@ -1677,6 +1810,7 @@ window.editCustomTask = (id) => {
   const mode = task.date_group_mode || "NONE";
   const dgModeRadio = document.querySelector(`input[name="customDateGroupMode"][value="${mode}"]`);
   if (dgModeRadio) dgModeRadio.checked = true;
+  toggleRecurrenceUI('custom');
 
   // Change submit button and add cancel button
   const submitBtn = document.getElementById("submitCustomBtn");
@@ -1800,6 +1934,9 @@ function renderCustomTaskList() {
     const nextTriggerStr = nextTriggerDate ? formatDatetimeString(nextTriggerDate) : null;
     const countdownText = nextTriggerStr ? calculateCountdown(nextTriggerStr) : null;
     const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode);
+    const isExcludedToday = task.is_enabled &&
+      (task.date_group_mode || "").toUpperCase() === "EXCLUDE" &&
+      isDateExcludedInGroups(new Date(), task.date_group_ids);
 
     return `
       <div class="task-item" data-id="${task.id}">
@@ -1811,6 +1948,7 @@ function renderCustomTaskList() {
               <span class="slider"></span>
             </label>
             ${task.always_on_top ? '<span class="action-chip ENABLE">📌 置顶弹窗</span>' : ''}
+            ${isExcludedToday ? '<span class="task-status-badge SKIPPED">🚫 今日跳过 (命中例外组)</span>' : ''}
             ${(task.is_enabled && countdownText) ? `<span class="task-status-badge PENDING custom-countdown" data-next="${nextTriggerStr}">⏳ 倒计时: ${countdownText}</span>` : ''}
           </div>
 
@@ -1933,6 +2071,15 @@ window.addEventListener("DOMContentLoaded", () => {
         showTopmostTriggerAlert(payload);
       }
       fetchCustomTasks();
+    });
+
+    window.__TAURI__.event.listen("custom_task_log", (event) => {
+      const msg = typeof event.payload === "string" ? event.payload : JSON.stringify(event.payload);
+      const isWarn = msg.includes("跳过") || msg.includes("🚫");
+      const isErr = msg.includes("失败") || msg.includes("❌");
+      const isSuccess = msg.includes("成功") || msg.includes("▶️");
+      const type = isWarn ? "warning" : (isErr ? "error" : (isSuccess ? "success" : "info"));
+      appendLog(msg, type);
     });
   }
 });

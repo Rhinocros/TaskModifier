@@ -917,6 +917,13 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   color: var(--accent-rose);
 }
 
+.task-status-badge.SKIPPED {
+  background: rgba(239, 68, 68, 0.15);
+  color: #f87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+  font-weight: 600;
+}
+
 /* Custom Task Card Tags */
 .custom-tags-group {
   display: flex;
@@ -1594,6 +1601,12 @@ input:checked + .slider:before {
 
 .date-group-chip-select:hover {
   border-color: #38bdf8;
+}
+
+.date-group-chip-select:has(input[type="checkbox"]:checked) {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.25);
 }
 
 .date-group-chip-select input[type="checkbox"]:checked ~ span {

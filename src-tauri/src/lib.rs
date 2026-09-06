@@ -149,65 +149,227 @@ fn save_date_groups_to_disk(groups: &[DateGroup]) {
     }
 }
 
-pub fn is_date_in_date_groups(
-    now_date_str: &str, // "YYYY-MM-DD"
-    now_str: &str,      // "YYYY-MM-DD HH:mm:ss"
-    groups: &[DateGroup],
-    target_group_ids: &[String],
-) -> (bool, bool) {
-    if target_group_ids.is_empty() {
-        return (false, false);
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedDateEntry {
+    DateRange {
+        start: chrono::NaiveDate,
+        end: chrono::NaiveDate,
+    },
+    SingleDate {
+        date: chrono::NaiveDate,
+        time: Option<chrono::NaiveTime>,
+    },
+}
+
+fn extract_numbers(s: &str) -> Vec<u32> {
+    let mut nums = Vec::new();
+    let mut cur = String::new();
+    for ch in s.chars() {
+        if ch.is_ascii_digit() {
+            cur.push(ch);
+        } else if !cur.is_empty() {
+            if let Ok(n) = cur.parse::<u32>() {
+                nums.push(n);
+            }
+            cur.clear();
+        }
+    }
+    if !cur.is_empty() {
+        if let Ok(n) = cur.parse::<u32>() {
+            nums.push(n);
+        }
+    }
+    nums
+}
+
+pub fn parse_flexible_date(s: &str) -> Option<chrono::NaiveDate> {
+    let nums = extract_numbers(s);
+    if nums.len() >= 3 {
+        let (y, m, d) = (nums[0] as i32, nums[1], nums[2]);
+        if (1970..=2100).contains(&y) && (1..=12).contains(&m) && (1..=31).contains(&d) {
+            return chrono::NaiveDate::from_ymd_opt(y, m, d);
+        }
+    }
+    None
+}
+
+pub fn parse_flexible_time(s: &str) -> Option<chrono::NaiveTime> {
+    let nums = extract_numbers(s);
+    if nums.len() >= 2 {
+        let h = nums[0];
+        let m = nums[1];
+        let sec = if nums.len() >= 3 { nums[2] } else { 0 };
+        if h < 24 && m < 60 && sec < 60 {
+            return chrono::NaiveTime::from_hms_opt(h, m, sec);
+        }
+    }
+    None
+}
+
+pub fn parse_flexible_datetime(s: &str) -> Option<chrono::NaiveDateTime> {
+    let nums = extract_numbers(s);
+    if nums.len() >= 3 {
+        let (y, m, d) = (nums[0] as i32, nums[1], nums[2]);
+        let date = chrono::NaiveDate::from_ymd_opt(y, m, d)?;
+        let h = if nums.len() >= 4 { nums[3] } else { 0 };
+        let m = if nums.len() >= 5 { nums[4] } else { 0 };
+        let s = if nums.len() >= 6 { nums[5] } else { 0 };
+        if h < 24 && m < 60 && s < 60 {
+            let time = chrono::NaiveTime::from_hms_opt(h, m, s)?;
+            return Some(chrono::NaiveDateTime::new(date, time));
+        }
+    }
+    None
+}
+
+pub fn parse_date_group_item(item: &str) -> Option<ParsedDateEntry> {
+    let trimmed = item.trim();
+
+    // 支持多种区间连接符：~, 至, 到, " - " (避免普通连字符如 2026-10-01)
+    let range_split = if trimmed.contains('~') {
+        Some(trimmed.splitn(2, '~').collect::<Vec<_>>())
+    } else if trimmed.contains("至") {
+        Some(trimmed.splitn(2, "至").collect::<Vec<_>>())
+    } else if trimmed.contains("到") {
+        Some(trimmed.splitn(2, "到").collect::<Vec<_>>())
+    } else if trimmed.contains(" - ") {
+        Some(trimmed.splitn(2, " - ").collect::<Vec<_>>())
+    } else {
+        None
+    };
+
+    if let Some(parts) = range_split {
+        if parts.len() == 2 {
+            let start = parse_flexible_date(parts[0])?;
+            let end = parse_flexible_date(parts[1])?;
+            return Some(ParsedDateEntry::DateRange { start, end });
+        }
     }
 
-    let now_date = chrono::NaiveDate::parse_from_str(now_date_str, "%Y-%m-%d")
-        .or_else(|_| chrono::NaiveDate::parse_from_str(now_date_str, "%Y/%m/%d")).ok();
+    let nums = extract_numbers(trimmed);
+    if nums.len() >= 3 {
+        let (y, m, d) = (nums[0] as i32, nums[1], nums[2]);
+        let date = chrono::NaiveDate::from_ymd_opt(y, m, d)?;
+        if nums.len() >= 5 {
+            let h = nums[3];
+            let min = nums[4];
+            let sec = if nums.len() >= 6 { nums[5] } else { 0 };
+            if h < 24 && min < 60 && sec < 60 {
+                let time = chrono::NaiveTime::from_hms_opt(h, min, sec);
+                return Some(ParsedDateEntry::SingleDate { date, time });
+            }
+        }
+        return Some(ParsedDateEntry::SingleDate { date, time: None });
+    }
 
-    let mut is_in_date = false;
-    let mut is_in_time = false;
+    None
+}
 
+/// 检查指定日期是否落在关联的日期组内。
+/// 日期组纯粹作为共享日期集合（单日期或区间），供多个任务读取引用；
+/// 任务线程仅从日期组读取日期判断“今天是否在日期组中”，不从中读取执行程序或时间。
+pub fn is_date_in_groups(
+    date: chrono::NaiveDate,
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+) -> bool {
+    if target_group_ids.is_empty() {
+        return false;
+    }
     for group in groups {
-        if target_group_ids.contains(&group.id) {
+        let group_id = group.id.trim();
+        if target_group_ids.iter().any(|tg_id| tg_id.trim().eq_ignore_ascii_case(group_id)) {
             for item in &group.dates {
-                let trimmed = item.trim().replace('/', "-");
-                // Range match e.g. "2026-10-01 ~ 2026-10-07"
-                if trimmed.contains('~') {
-                    let parts: Vec<&str> = trimmed.split('~').collect();
-                    if parts.len() == 2 {
-                        let start_str = parts[0].trim();
-                        let end_str = parts[1].trim();
-                        if let (Some(d), Ok(start), Ok(end)) = (
-                            now_date,
-                            chrono::NaiveDate::parse_from_str(start_str, "%Y-%m-%d"),
-                            chrono::NaiveDate::parse_from_str(end_str, "%Y-%m-%d"),
-                        ) {
-                            if d >= start && d <= end {
-                                is_in_date = true;
+                if let Some(parsed) = parse_date_group_item(item) {
+                    match parsed {
+                        ParsedDateEntry::DateRange { start, end } => {
+                            if date >= start && date <= end {
+                                return true;
+                            }
+                        }
+                        ParsedDateEntry::SingleDate { date: d, .. } => {
+                            if d == date {
+                                return true;
                             }
                         }
                     }
-                } else if trimmed.len() == 10 { // "YYYY-MM-DD"
-                    if trimmed == now_date_str {
-                        is_in_date = true;
-                    }
-                } else if trimmed.len() == 19 { // "YYYY-MM-DD HH:mm:ss"
-                    if let (Ok(target_dt), Ok(now_dt)) = (
-                        chrono::NaiveDateTime::parse_from_str(&trimmed, "%Y-%m-%d %H:%M:%S"),
-                        chrono::NaiveDateTime::parse_from_str(now_str, "%Y-%m-%d %H:%M:%S")
-                    ) {
-                        if target_dt.date() == now_dt.date() {
-                            is_in_date = true;
-                            if now_dt >= target_dt {
-                                is_in_time = true;
-                            }
-                        }
-                    }
-                } else if trimmed == now_str { // fallback
-                    is_in_date = true;
                 }
             }
         }
     }
-    (is_in_date, is_in_time)
+    false
+}
+
+/// 兼容别名
+pub fn is_date_excluded(
+    date: chrono::NaiveDate,
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+) -> bool {
+    is_date_in_groups(date, groups, target_group_ids)
+}
+
+/// 提取指定日期在关联特例日期组中所设定的触发时刻：
+/// - 若日期组条目显式设定了具体时间（例如 08:30:00），提取该具体时刻；
+/// - 若未显式设定时间（仅写了日期或为日期区间），回退采用任务自身设定的时刻（fallback_time）。
+pub fn get_force_trigger_times(
+    date: chrono::NaiveDate,
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+    fallback_time: Option<chrono::NaiveTime>,
+) -> Vec<chrono::NaiveTime> {
+    let mut times = Vec::new();
+    if target_group_ids.is_empty() {
+        return times;
+    }
+
+    for group in groups {
+        let group_id = group.id.trim();
+        if target_group_ids.iter().any(|tg_id| tg_id.trim().eq_ignore_ascii_case(group_id)) {
+            for item in &group.dates {
+                if let Some(parsed) = parse_date_group_item(item) {
+                    match parsed {
+                        ParsedDateEntry::DateRange { start, end } => {
+                            if date >= start && date <= end {
+                                let t = fallback_time.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+                                if !times.contains(&t) {
+                                    times.push(t);
+                                }
+                            }
+                        }
+                        ParsedDateEntry::SingleDate { date: d, time } => {
+                            if d == date {
+                                let t = match time {
+                                    Some(explicit_t) => explicit_t,
+                                    None => fallback_time.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
+                                };
+                                if !times.contains(&t) {
+                                    times.push(t);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    times.sort();
+    times
+}
+
+/// 兼容老接口
+pub fn is_date_in_date_groups(
+    now_date_str: &str,
+    _now_str: &str,
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+) -> (bool, bool) {
+    if let Some(d) = parse_flexible_date(now_date_str) {
+        let is_in = is_date_excluded(d, groups, target_group_ids);
+        (is_in, is_in)
+    } else {
+        (false, false)
+    }
 }
 
 fn load_tasks_from_disk() -> Vec<TaskRule> {
@@ -282,26 +444,12 @@ pub fn is_workday(date: chrono::NaiveDate, calendar: &HolidayCalendar) -> bool {
     weekday <= 5
 }
 
-pub fn matches_recurrence(
+pub fn matches_recurrence_day(
     rule: &RecurrenceRule,
-    now: chrono::DateTime<chrono::Local>,
+    today: chrono::NaiveDate,
     calendar: &HolidayCalendar,
 ) -> bool {
     use chrono::Datelike;
-
-    if !rule.time_of_day.is_empty() {
-        let current_time_str = now.format("%H:%M:%S").to_string();
-        let target_time = if rule.time_of_day.len() == 5 {
-            format!("{}:00", rule.time_of_day)
-        } else {
-            rule.time_of_day.clone()
-        };
-        if current_time_str != target_time {
-            return false;
-        }
-    }
-
-    let today = now.date_naive();
     let weekday = today.weekday().number_from_monday();
     let day_of_month = today.day();
 
@@ -331,6 +479,26 @@ pub fn matches_recurrence(
         "HOLIDAY" => !is_workday(today, calendar),
         _ => false,
     }
+}
+
+pub fn matches_recurrence(
+    rule: &RecurrenceRule,
+    now: chrono::DateTime<chrono::Local>,
+    calendar: &HolidayCalendar,
+) -> bool {
+    if !rule.time_of_day.is_empty() {
+        let current_time_str = now.format("%H:%M:%S").to_string();
+        let target_time = if rule.time_of_day.len() == 5 {
+            format!("{}:00", rule.time_of_day)
+        } else {
+            rule.time_of_day.clone()
+        };
+        if current_time_str != target_time {
+            return false;
+        }
+    }
+
+    matches_recurrence_day(rule, now.date_naive(), calendar)
 }
 
 fn decode_win_output(bytes: &[u8]) -> String {
@@ -494,7 +662,7 @@ fn parse_args(args_str: &str) -> Vec<String> {
     args
 }
 
-fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskRule) {
+fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskRule, reason: &str) {
     for exe in &task.executables {
         let exe_str = exe.trim().to_string();
         if !exe_str.is_empty() {
@@ -533,18 +701,32 @@ fn trigger_custom_task_actions(app_handle: &tauri::AppHandle, task: &CustomTaskR
 
     #[derive(Serialize, Clone)]
     struct TriggerPayload {
+        task_id: String,
         task_name: String,
+        trigger_reason: String,
+        executables: Vec<String>,
         popup_messages: Vec<String>,
         always_on_top: bool,
     }
 
     let payload = TriggerPayload {
+        task_id: task.id.clone(),
         task_name: task.name.clone(),
+        trigger_reason: reason.to_string(),
+        executables: task.executables.clone(),
         popup_messages: task.popup_messages.clone(),
         always_on_top: task.always_on_top,
     };
 
     let _ = app_handle.emit("custom_task_triggered", payload);
+
+    let log_msg = format!("🚀 自主任务 [{}] 触发执行（{}），程序: {:?}", task.name, reason, task.executables);
+    let _ = app_handle.emit("custom_task_log", serde_json::json!({
+        "level": "success",
+        "message": log_msg,
+        "task_id": task.id,
+        "task_name": task.name,
+    }));
 }
 
 // ----------------- 节假日在线同步服务 -----------------
@@ -744,6 +926,18 @@ fn add_task(
     let now_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let id = format!("{}", Local::now().timestamp_millis());
 
+    let clean_group_ids: Vec<String> = date_group_ids
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let clean_mode = if clean_group_ids.is_empty() {
+        "NONE".to_string()
+    } else {
+        date_group_mode.unwrap_or_else(|| "NONE".into()).trim().to_uppercase()
+    };
+
     let new_rule = TaskRule {
         id,
         task_name: task_name.trim().to_string(),
@@ -752,8 +946,8 @@ fn add_task(
         status: "PENDING".into(),
         log_message: None,
         created_at: now_str,
-        date_group_ids: date_group_ids.unwrap_or_default(),
-        date_group_mode: date_group_mode.unwrap_or_else(|| "NONE".into()),
+        date_group_ids: clean_group_ids,
+        date_group_mode: clean_mode,
     };
 
     let mut tasks = state.tasks.lock().unwrap();
@@ -821,22 +1015,48 @@ fn add_custom_task(
     let now_str = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let id = format!("custom_{}", Local::now().timestamp_millis());
 
+    let clean_enable_windows: Vec<TimeWindow> = enable_windows
+        .into_iter()
+        .map(|w| TimeWindow {
+            start_time: w.start_time.map(|s| s.trim().replace('/', "-")),
+            end_time: w.end_time.map(|s| s.trim().replace('/', "-")),
+        })
+        .collect();
+
+    let clean_trigger_datetimes: Vec<String> = trigger_datetimes
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().replace('/', "-"))
+        .collect();
+
+    let clean_group_ids: Vec<String> = date_group_ids
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let clean_mode = if clean_group_ids.is_empty() {
+        "NONE".to_string()
+    } else {
+        date_group_mode.unwrap_or_else(|| "NONE".into()).trim().to_uppercase()
+    };
+
     let rule = CustomTaskRule {
         id,
         name: name.trim().to_string(),
         is_enabled: true,
         enable_window_start: None,
         enable_window_end: None,
-        enable_windows,
-        trigger_datetimes: trigger_datetimes.into_iter().filter(|s| !s.trim().is_empty()).collect(),
+        enable_windows: clean_enable_windows,
+        trigger_datetimes: clean_trigger_datetimes,
         executables: executables.into_iter().filter(|s| !s.trim().is_empty()).collect(),
         popup_messages: popup_messages.into_iter().filter(|s| !s.trim().is_empty()).collect(),
         always_on_top,
         triggered_history: Vec::new(),
         created_at: now_str,
         recurrence,
-        date_group_ids: date_group_ids.unwrap_or_default(),
-        date_group_mode: date_group_mode.unwrap_or_else(|| "NONE".into()),
+        date_group_ids: clean_group_ids,
+        date_group_mode: clean_mode,
     };
 
     let mut tasks = state.custom_tasks.lock().unwrap();
@@ -864,17 +1084,43 @@ fn update_custom_task(
         return Err("自定义任务名称不能为空".into());
     }
 
+    let clean_enable_windows: Vec<TimeWindow> = enable_windows
+        .into_iter()
+        .map(|w| TimeWindow {
+            start_time: w.start_time.map(|s| s.trim().replace('/', "-")),
+            end_time: w.end_time.map(|s| s.trim().replace('/', "-")),
+        })
+        .collect();
+
+    let clean_trigger_datetimes: Vec<String> = trigger_datetimes
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().replace('/', "-"))
+        .collect();
+
+    let clean_group_ids: Vec<String> = date_group_ids
+        .unwrap_or_default()
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let clean_mode = if clean_group_ids.is_empty() {
+        "NONE".to_string()
+    } else {
+        date_group_mode.unwrap_or_else(|| "NONE".into()).trim().to_uppercase()
+    };
+
     let mut tasks = state.custom_tasks.lock().unwrap();
     if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
         task.name = name.trim().to_string();
-        task.enable_windows = enable_windows;
-        task.trigger_datetimes = trigger_datetimes.into_iter().filter(|s| !s.trim().is_empty()).collect();
+        task.enable_windows = clean_enable_windows;
+        task.trigger_datetimes = clean_trigger_datetimes;
         task.executables = executables.into_iter().filter(|s| !s.trim().is_empty()).collect();
         task.popup_messages = popup_messages.into_iter().filter(|s| !s.trim().is_empty()).collect();
         task.always_on_top = always_on_top;
         task.recurrence = recurrence;
-        task.date_group_ids = date_group_ids.unwrap_or_default();
-        task.date_group_mode = date_group_mode.unwrap_or_else(|| "NONE".into());
+        task.date_group_ids = clean_group_ids;
+        task.date_group_mode = clean_mode;
         
         let updated = task.clone();
         save_custom_tasks_to_disk(&tasks);
@@ -908,7 +1154,7 @@ fn toggle_custom_task(state: tauri::State<'_, AppState>, id: String, is_enabled:
 fn execute_custom_task_now(app_handle: tauri::AppHandle, state: tauri::State<'_, AppState>, id: String) -> Result<String, String> {
     let tasks = state.custom_tasks.lock().unwrap();
     if let Some(t) = tasks.iter().find(|task| task.id == id) {
-        trigger_custom_task_actions(&app_handle, t);
+        trigger_custom_task_actions(&app_handle, t, "用户界面手动即时测试");
         Ok("已成功手动即时触发该自定义任务！".to_string())
     } else {
         Err("找不到指定自定义任务".into())
@@ -968,12 +1214,15 @@ fn start_background_scheduler(
     date_groups_mutex: Arc<Mutex<Vec<DateGroup>>>,
 ) {
     tauri::async_runtime::spawn(async move {
+        let mut skipped_custom_logged: std::collections::HashSet<String> = std::collections::HashSet::new();
+
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
 
             let now = Local::now();
             let now_naive = now.naive_local();
-            let now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
+            let now_date = now_naive.date();
+            let _now_str = now.format("%Y-%m-%d %H:%M:%S").to_string();
             let now_date_str = now.format("%Y-%m-%d").to_string();
             let holiday_cal = holiday_calendar_mutex.lock().unwrap().clone();
             let date_groups = date_groups_mutex.lock().unwrap().clone();
@@ -986,34 +1235,46 @@ fn start_background_scheduler(
                 let mut tasks = tasks_mutex.lock().unwrap();
                 for task in tasks.iter_mut() {
                     if task.status == "PENDING" {
-                        let (is_in_group, _) = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+                        let target_dt = match parse_flexible_datetime(&task.target_time) {
+                            Some(dt) => dt,
+                            None => continue,
+                        };
 
-                        // 如果匹配“不触发”特例日期组，则跳过
-                        if task.date_group_mode == "EXCLUDE" && is_in_group {
+                        let is_exclude = task.date_group_mode.trim().eq_ignore_ascii_case("EXCLUDE");
+                        let is_in_group = if !task.date_group_ids.is_empty() {
+                            is_date_in_groups(target_dt.date(), &date_groups, &task.date_group_ids)
+                                || is_date_in_groups(now_date, &date_groups, &task.date_group_ids)
+                        } else {
+                            false
+                        };
+
+                        // A. 遇日期组排除/跳过（EXCLUDE）：到期直接标记为 SKIPPED
+                        if is_exclude && is_in_group {
+                            if now_naive >= target_dt {
+                                task.status = "SKIPPED".into();
+                                task.log_message = Some("落在关联日期组排除名单内，已跳过执行".into());
+                                should_save_tasks = true;
+                                tasks_to_notify = true;
+                                continue;
+                            }
                             continue;
                         }
 
-                        let mut force_triggered = false;
-                        if task.date_group_mode == "FORCE_TRIGGER" && is_in_group {
-                            force_triggered = true;
-                        }
-
-                        if let Ok(target) = NaiveDateTime::parse_from_str(&task.target_time, "%Y-%m-%d %H:%M:%S") {
-                            if now_naive >= target || force_triggered {
-                                let res = execute_schtasks(&task.task_name, &task.action);
-                                match &res {
-                                    Ok(msg) => {
-                                        task.status = "SUCCESS".into();
-                                        task.log_message = Some(msg.clone());
-                                    }
-                                    Err(err) => {
-                                        task.status = "FAILED".into();
-                                        task.log_message = Some(err.clone());
-                                    }
+                        // B. 到达任务自身设定的目标时间（是否执行、何时执行完全由任务自身控制）
+                        if now_naive >= target_dt {
+                            let res = execute_schtasks(&task.task_name, &task.action);
+                            match &res {
+                                Ok(msg) => {
+                                    task.status = "SUCCESS".into();
+                                    task.log_message = Some(msg.clone());
                                 }
-                                should_save_tasks = true;
-                                tasks_to_notify = true;
+                                Err(err) => {
+                                    task.status = "FAILED".into();
+                                    task.log_message = Some(err.clone());
+                                }
                             }
+                            should_save_tasks = true;
+                            tasks_to_notify = true;
                         }
                     }
                 }
@@ -1034,6 +1295,11 @@ fn start_background_scheduler(
             {
                 let mut custom_tasks = custom_tasks_mutex.lock().unwrap();
                 for task in custom_tasks.iter_mut() {
+                    if !task.is_enabled {
+                        continue;
+                    }
+
+                    // 有效时间区间校验
                     let mut in_time_window = true;
                     let mut windows = task.enable_windows.clone();
 
@@ -1049,14 +1315,14 @@ fn start_background_scheduler(
                         for win in &windows {
                             let mut match_win = true;
                             if let Some(start_str) = &win.start_time {
-                                if let Ok(start_dt) = NaiveDateTime::parse_from_str(start_str, "%Y-%m-%d %H:%M:%S") {
+                                if let Some(start_dt) = parse_flexible_datetime(start_str) {
                                     if now_naive < start_dt {
                                         match_win = false;
                                     }
                                 }
                             }
                             if let Some(end_str) = &win.end_time {
-                                if let Ok(end_dt) = NaiveDateTime::parse_from_str(end_str, "%Y-%m-%d %H:%M:%S") {
+                                if let Some(end_dt) = parse_flexible_datetime(end_str) {
                                     if now_naive > end_dt {
                                         match_win = false;
                                     }
@@ -1069,67 +1335,125 @@ fn start_background_scheduler(
                         }
                     }
 
-                    if !task.is_enabled || !in_time_window {
+                    if !in_time_window {
                         continue;
                     }
 
-                    let (is_in_group, is_in_time) = is_date_in_date_groups(&now_date_str, &now_str, &date_groups, &task.date_group_ids);
+                    let is_exclude = task.date_group_mode.trim().eq_ignore_ascii_case("EXCLUDE");
+                    let is_force = task.date_group_mode.trim().eq_ignore_ascii_case("FORCE_TRIGGER");
 
-                    // 如果处于“遇此组不触发”例外，跳过该规则
-                    if task.date_group_mode == "EXCLUDE" && is_in_group {
-                        continue;
+                    // 从日期组仅读取设置的日期（判断今天是否在关联的日期组中）
+                    let is_today_in_group = if !task.date_group_ids.is_empty() {
+                        is_date_in_groups(now_date, &date_groups, &task.date_group_ids)
+                    } else {
+                        false
+                    };
+
+                    // 1. 任务线程控制：若任务设置了“跳过/排除”，且今天在日期组中，今日全天彻底跳过不执行
+                    if is_exclude && is_today_in_group {
+                        let log_key = format!("{}_{}", now_date_str, task.id);
+                        if skipped_custom_logged.insert(log_key) {
+                            let msg = format!("🚫 自主任务 [{}] 命中日期组排除规则，今日 ({}) 全天彻底跳过不执行", task.name, now_date_str);
+                            let _ = app_handle.emit("custom_task_log", serde_json::json!({
+                                "level": "warning",
+                                "message": msg,
+                                "task_id": task.id,
+                                "task_name": task.name,
+                            }));
+                        }
+                        continue; // 任务线程在此处直接跳过，本任务今日不执行任何动作
                     }
 
-                    // 如果处于“遇此组强制/临时触发”特例
-                    if task.date_group_mode == "FORCE_TRIGGER" && is_in_group {
-                        let time_part = if let Some(ref r) = task.recurrence {
-                            if !r.time_of_day.is_empty() { r.time_of_day.clone() } else { "00:00:00".to_string() }
+                    // 获取任务自身配置的执行时刻（由任务自身控制什么时候执行，绝不从日期组取时间）
+                    let task_time = task.recurrence.as_ref().and_then(|r| {
+                        if !r.time_of_day.is_empty() {
+                            parse_flexible_time(&r.time_of_day)
                         } else {
-                            "00:00:00".to_string()
-                        };
-                        let force_key = format!("force_group_{}_{}_{}", now_date_str, time_part, task.id);
+                            None
+                        }
+                    }).unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
 
-                        let time_matches = if is_in_time {
-                            true
-                        } else if let Some(ref r) = task.recurrence {
-                            if !r.time_of_day.is_empty() {
-                                let current_time_str = now.format("%H:%M:%S").to_string();
-                                let target_t = if r.time_of_day.len() == 5 { format!("{}:00", r.time_of_day) } else { r.time_of_day.clone() };
-                                current_time_str == target_t
-                            } else {
-                                true
+                    // 2. 任务线程控制：若任务设置了“遇特例日期组生效/触发”
+                    // 从日期组提取今日触发时刻（若日期组显式设定了具体时间则按该时间，未设时间则按任务自身配置时刻 task_time 触发）
+                    let mut date_group_triggered_today = false;
+                    if is_force && !task.date_group_ids.is_empty() {
+                        let force_times = get_force_trigger_times(now_date, &date_groups, &task.date_group_ids, Some(task_time));
+                        for ft in force_times {
+                            let force_dt = chrono::NaiveDateTime::new(now_date, ft);
+                            let time_key = ft.format("%H:%M:%S").to_string();
+                            let trigger_key = format!("task_dategroup_{}_{}_{}", now_date_str, time_key, task.id);
+
+                            if now_naive >= force_dt && now_naive.signed_duration_since(force_dt).num_seconds() <= 60 {
+                                if !task.triggered_history.contains(&trigger_key) {
+                                    task.triggered_history.push(trigger_key);
+                                    date_group_triggered_today = true;
+                                    should_save_custom = true;
+                                    custom_updated = true;
+                                    let reason = format!("命中特例生效日期组时刻 ({})", time_key);
+                                    trigger_custom_task_actions(&app_handle, task, &reason);
+                                }
                             }
-                        } else {
-                            true
-                        };
-
-                        if time_matches && !task.triggered_history.contains(&force_key) {
-                            task.triggered_history.push(force_key);
-                            should_save_custom = true;
-                            custom_updated = true;
-                            trigger_custom_task_actions(&app_handle, task);
                         }
                     }
 
-                    // A. 校验单次不规则触发时刻
+                    // 3. 任务线程控制：单次指定不规则触发时刻（由任务自身 trigger_datetimes 字段控制）
                     for dt in &task.trigger_datetimes {
-                        if dt == &now_str && !task.triggered_history.contains(dt) {
-                            task.triggered_history.push(dt.clone());
-                            should_save_custom = true;
-                            custom_updated = true;
-                            trigger_custom_task_actions(&app_handle, task);
+                        if let Some(target_dt) = parse_flexible_datetime(dt) {
+                            // 若此时间点的日期落在排除组内，任务线程控制跳过
+                            if is_exclude && !task.date_group_ids.is_empty() && is_date_in_groups(target_dt.date(), &date_groups, &task.date_group_ids) {
+                                continue;
+                            }
+
+                            let standard_key = target_dt.format("%Y-%m-%d %H:%M:%S").to_string();
+                            if now_naive >= target_dt && now_naive.signed_duration_since(target_dt).num_seconds() <= 60 {
+                                if !task.triggered_history.contains(dt) && !task.triggered_history.contains(&standard_key) {
+                                    task.triggered_history.push(dt.clone());
+                                    if *dt != standard_key {
+                                        task.triggered_history.push(standard_key);
+                                    }
+                                    should_save_custom = true;
+                                    custom_updated = true;
+                                    let reason = format!("到达任务自设的单次指定时刻 ({})", dt);
+                                    trigger_custom_task_actions(&app_handle, task, &reason);
+                                }
+                            }
                         }
                     }
 
-                    // B. 校验循环规则
+                    // 4. 任务线程控制：常规周期循环规则触发（每天/每周/工作日等，由任务自身控制）
                     if let Some(ref rule) = task.recurrence {
-                        if rule.mode != "ONCE" {
-                            let trigger_key = format!("recur_{}_{}", now_date_str, rule.time_of_day);
-                            if matches_recurrence(rule, now, &holiday_cal) && !task.triggered_history.contains(&trigger_key) {
-                                task.triggered_history.push(trigger_key);
-                                should_save_custom = true;
-                                custom_updated = true;
-                                trigger_custom_task_actions(&app_handle, task);
+                        if rule.mode != "ONCE" && !date_group_triggered_today {
+                            let time_str = if rule.time_of_day.len() == 5 {
+                                format!("{}:00", rule.time_of_day)
+                            } else if rule.time_of_day.is_empty() {
+                                "09:00:00".to_string()
+                            } else {
+                                rule.time_of_day.clone()
+                            };
+
+                            let trigger_key = format!("recur_{}_{}_{}", now_date_str, time_str, task.id);
+
+                            if !task.triggered_history.contains(&trigger_key) {
+                                if let Some(rule_t) = parse_flexible_time(&time_str) {
+                                    let rule_dt = chrono::NaiveDateTime::new(now_date, rule_t);
+                                    if now_naive >= rule_dt && now_naive.signed_duration_since(rule_dt).num_seconds() <= 60 {
+                                        if matches_recurrence_day(rule, now_date, &holiday_cal) {
+                                            task.triggered_history.push(trigger_key);
+                                            should_save_custom = true;
+                                            custom_updated = true;
+                                            let mode_desc = match rule.mode.as_str() {
+                                                "DAILY" => "每日循环",
+                                                "WEEKLY" => "每周循环",
+                                                "MONTHLY" => "每月循环",
+                                                "WORKDAY" => "法定工作日循环",
+                                                "HOLIDAY" => "法定节假日循环",
+                                                _ => "周期循环",
+                                            };
+                                            let reason = format!("{}到达任务自设时刻 ({})", mode_desc, time_str);
+                                            trigger_custom_task_actions(&app_handle, task, &reason);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -1251,3 +1575,221 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{NaiveDate, NaiveTime};
+
+    #[test]
+    fn test_parse_flexible_date_and_time() {
+        assert_eq!(parse_flexible_date("2026-10-01"), Some(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()));
+        assert_eq!(parse_flexible_date("2026/10/01"), Some(NaiveDate::from_ymd_opt(2026, 10, 1).unwrap()));
+        assert_eq!(parse_flexible_date("2026-9-6"), Some(NaiveDate::from_ymd_opt(2026, 9, 6).unwrap()));
+        assert_eq!(parse_flexible_date("2026/9/6"), Some(NaiveDate::from_ymd_opt(2026, 9, 6).unwrap()));
+
+        assert_eq!(parse_flexible_time("08:30:00"), Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap()));
+        assert_eq!(parse_flexible_time("08:30"), Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap()));
+        assert_eq!(parse_flexible_time("8:5"), Some(NaiveTime::from_hms_opt(8, 5, 0).unwrap()));
+    }
+
+    #[test]
+    fn test_parse_date_group_item() {
+        // Single date with time
+        let item1 = parse_date_group_item("2026/10/01 14:30:00").unwrap();
+        assert_eq!(
+            item1,
+            ParsedDateEntry::SingleDate {
+                date: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+                time: Some(NaiveTime::from_hms_opt(14, 30, 0).unwrap()),
+            }
+        );
+
+        // Single date with HH:mm
+        let item2 = parse_date_group_item("2026-10-01 08:30").unwrap();
+        assert_eq!(
+            item2,
+            ParsedDateEntry::SingleDate {
+                date: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+                time: Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap()),
+            }
+        );
+
+        // Date only
+        let item3 = parse_date_group_item("2026/10/01").unwrap();
+        assert_eq!(
+            item3,
+            ParsedDateEntry::SingleDate {
+                date: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+                time: None,
+            }
+        );
+
+        // Date range
+        let item4 = parse_date_group_item("2026/10/01 ~ 2026/10/07").unwrap();
+        assert_eq!(
+            item4,
+            ParsedDateEntry::DateRange {
+                start: NaiveDate::from_ymd_opt(2026, 10, 1).unwrap(),
+                end: NaiveDate::from_ymd_opt(2026, 10, 7).unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_is_date_excluded_skips_whole_day_regardless_of_time() {
+        let groups = vec![
+            DateGroup {
+                id: "g1".into(),
+                name: "国庆封网".into(),
+                description: None,
+                dates: vec![
+                    "2026/10/01 14:30:00".into(), // 带具体时间的条目
+                    "2026/10/03 ~ 2026/10/05".into(), // 范围
+                    "2026-10-07".into(), // 纯日期
+                ],
+                created_at: "".into(),
+            },
+        ];
+        let target_ids = vec!["g1".into()];
+
+        // 即使设置了 14:30:00，当天全天（任何时间）均属于排除日
+        let oct_01 = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        assert!(is_date_excluded(oct_01, &groups, &target_ids));
+
+        // 范围内的日期均排除
+        let oct_03 = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let oct_04 = NaiveDate::from_ymd_opt(2026, 10, 4).unwrap();
+        let oct_05 = NaiveDate::from_ymd_opt(2026, 10, 5).unwrap();
+        assert!(is_date_excluded(oct_03, &groups, &target_ids));
+        assert!(is_date_excluded(oct_04, &groups, &target_ids));
+        assert!(is_date_excluded(oct_05, &groups, &target_ids));
+
+        // 单纯日期排除
+        let oct_07 = NaiveDate::from_ymd_opt(2026, 10, 7).unwrap();
+        assert!(is_date_excluded(oct_07, &groups, &target_ids));
+
+        // 不在日期组内的日期正常放行
+        let oct_02 = NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
+        let oct_06 = NaiveDate::from_ymd_opt(2026, 10, 6).unwrap();
+        let oct_08 = NaiveDate::from_ymd_opt(2026, 10, 8).unwrap();
+        assert!(!is_date_excluded(oct_02, &groups, &target_ids));
+        assert!(!is_date_excluded(oct_06, &groups, &target_ids));
+        assert!(!is_date_excluded(oct_08, &groups, &target_ids));
+    }
+
+    #[test]
+    fn test_get_force_trigger_times() {
+        let groups = vec![
+            DateGroup {
+                id: "g1".into(),
+                name: "公共日期时间组".into(),
+                description: None,
+                dates: vec![
+                    "2026/10/01 14:20:00".into(), // 显式设定时间
+                    "2026/10/02".into(),          // 仅设定日期
+                ],
+                created_at: "".into(),
+            },
+        ];
+        let target_ids = vec!["g1".into()];
+
+        let oct_01 = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
+        // 显式设定时间的条目，优先采用组内精确指定的时刻 14:20:00
+        let times_oct_01 = get_force_trigger_times(oct_01, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        assert_eq!(times_oct_01, vec![
+            NaiveTime::from_hms_opt(14, 20, 0).unwrap(),
+        ]);
+
+        let oct_02 = NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
+        // 未显式设定时间的条目，回退采用任务自身设定的时刻 09:30:00
+        let times_oct_02 = get_force_trigger_times(oct_02, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        assert_eq!(times_oct_02, vec![
+            NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+        ]);
+
+        // 不在日期组内的日期（2026/10/03），不返回触发时刻
+        let oct_03 = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
+        let times_oct_03 = get_force_trigger_times(oct_03, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        assert!(times_oct_03.is_empty());
+    }
+
+    #[test]
+    fn test_flexible_parsing_edge_cases() {
+        // T separator
+        let dt1 = parse_date_group_item("2026-09-06T16:28:12").unwrap();
+        assert_eq!(
+            dt1,
+            ParsedDateEntry::SingleDate {
+                date: NaiveDate::from_ymd_opt(2026, 9, 6).unwrap(),
+                time: Some(NaiveTime::from_hms_opt(16, 28, 12).unwrap()),
+            }
+        );
+
+        // Dots and Chinese chars
+        let dt2 = parse_date_group_item("2026.09.06 08:30").unwrap();
+        assert_eq!(
+            dt2,
+            ParsedDateEntry::SingleDate {
+                date: NaiveDate::from_ymd_opt(2026, 9, 6).unwrap(),
+                time: Some(NaiveTime::from_hms_opt(8, 30, 0).unwrap()),
+            }
+        );
+
+        // Ranges with 至 and 到 and " - "
+        let r1 = parse_date_group_item("2026/09/01至2026/09/05").unwrap();
+        assert_eq!(
+            r1,
+            ParsedDateEntry::DateRange {
+                start: NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                end: NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
+            }
+        );
+
+        let r2 = parse_date_group_item("2026-09-01 - 2026-09-05").unwrap();
+        assert_eq!(
+            r2,
+            ParsedDateEntry::DateRange {
+                start: NaiveDate::from_ymd_opt(2026, 9, 1).unwrap(),
+                end: NaiveDate::from_ymd_opt(2026, 9, 5).unwrap(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_user_exact_data_exclusion() {
+        // 用户实际数据：日期组含 "2026/09/06 16:28:12"
+        let groups = vec![
+            DateGroup {
+                id: "group_1788682961128".into(),
+                name: "测试时间组".into(),
+                description: None,
+                dates: vec!["2026/09/06 16:28:12".into()],
+                created_at: "2026-09-06 16:22:41".into(),
+            },
+            DateGroup {
+                id: "group_1788683046966".into(),
+                name: "测试跳过".into(),
+                description: None,
+                dates: vec!["2026/09/06 16:25:55".into()],
+                created_at: "2026-09-06 16:24:06".into(),
+            },
+        ];
+
+        let target_ids = vec!["group_1788682961128".into()];
+        let today = NaiveDate::from_ymd_opt(2026, 9, 6).unwrap();
+
+        // 验证 2026-09-06 任何时刻全天彻底判定为排除/跳过
+        assert!(is_date_excluded(today, &groups, &target_ids));
+
+        // 即使传入 ID 带有空格或大小写不同也能正常命中排除
+        let target_ids_dirty = vec![" group_1788682961128 ".into()];
+        assert!(is_date_excluded(today, &groups, &target_ids_dirty));
+
+        // 次日 2026-09-07 正常放行，不受排除影响
+        let tomorrow = NaiveDate::from_ymd_opt(2026, 9, 7).unwrap();
+        assert!(!is_date_excluded(tomorrow, &groups, &target_ids));
+    }
+}
+
+
