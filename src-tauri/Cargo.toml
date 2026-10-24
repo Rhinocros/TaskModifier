@@ -1,6 +1,6 @@
 [package]
 name = "task-modifier"
-version = "1.0.0"
+version = "3.8.1"
 description = "Windows Scheduled Task Modifier"
 authors = ["Antigravity"]
 edition = "2021"
