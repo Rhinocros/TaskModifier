@@ -26,7 +26,7 @@ pub struct DateGroup {
     #[serde(default)]
     pub description: Option<String>,
     #[serde(default)]
-    pub dates: Vec<String>, // "YYYY-MM-DD" 或 "YYYY-MM-DD ~ YYYY-MM-DD" 或 "YYYY-MM-DD HH:mm:ss"
+    pub dates: Vec<String>, // "YYYY-MM-DD" / "YYYY-MM-DD HH:mm:ss" / "YYYY-MM-DD ~ YYYY-MM-DD"
     pub created_at: String,
 }
 
@@ -84,6 +84,8 @@ pub struct CustomTaskRule {
     pub date_group_ids: Vec<String>,
     #[serde(default)]
     pub date_group_mode: String, // "NONE", "EXCLUDE", "FORCE_TRIGGER"
+    #[serde(default)]
+    pub date_group_entry_values: Vec<String>, // 特例触发时显式认领的组内条目原文；一条不勾 = 当天不触发
 }
 
 #[derive(Default)]
@@ -265,9 +267,9 @@ pub fn parse_date_group_item(item: &str) -> Option<ParsedDateEntry> {
     None
 }
 
-/// 检查指定日期是否落在关联的日期组内。
+/// 检查指定日期是否落在关联的日期组内（只匹配日期，供全天跳过/命中判断使用）。
 /// 日期组纯粹作为共享日期集合（单日期或区间），供多个任务读取引用；
-/// 任务线程仅从日期组读取日期判断“今天是否在日期组中”，不从中读取执行程序或时间。
+/// 任务线程仅从日期组读取日期判断“今天是否在日期组中”，不从中读取执行程序。
 pub fn is_date_in_groups(
     date: chrono::NaiveDate,
     groups: &[DateGroup],
@@ -309,14 +311,23 @@ pub fn is_date_excluded(
     is_date_in_groups(date, groups, target_group_ids)
 }
 
-/// 提取指定日期在关联特例日期组中所设定的触发时刻：
-/// - 若日期组条目显式设定了具体时间（例如 08:30:00），提取该具体时刻；
+/// 任务是否认领该条目：条目原文（去首尾空白）出现在任务显式勾选的条目里才算认领。
+/// 一条都没勾 = 不认领任何条目，该任务当天不触发。
+fn entry_claimed(claimed: &[String], item: &str) -> bool {
+    let item = item.trim();
+    claimed.iter().any(|c| c.trim() == item)
+}
+
+/// 提取指定日期在关联特例日期组中所设定的全部触发时刻（已按时间升序去重）：
+/// - 只统计任务显式认领的条目，未认领任何条目则当天没有触发点；
+/// - 若条目显式设定了具体时间（例如 08:30:00），提取该具体时刻；
 /// - 若未显式设定时间（仅写了日期或为日期区间），回退采用任务自身设定的时刻（fallback_time）。
 pub fn get_force_trigger_times(
     date: chrono::NaiveDate,
     groups: &[DateGroup],
     target_group_ids: &[String],
     fallback_time: Option<chrono::NaiveTime>,
+    claimed: &[String],
 ) -> Vec<chrono::NaiveTime> {
     let mut times = Vec::new();
     if target_group_ids.is_empty() {
@@ -327,6 +338,9 @@ pub fn get_force_trigger_times(
         let group_id = group.id.trim();
         if target_group_ids.iter().any(|tg_id| tg_id.trim().eq_ignore_ascii_case(group_id)) {
             for item in &group.dates {
+                if !entry_claimed(claimed, item) {
+                    continue;
+                }
                 if let Some(parsed) = parse_date_group_item(item) {
                     match parsed {
                         ParsedDateEntry::DateRange { start, end } => {
@@ -355,6 +369,47 @@ pub fn get_force_trigger_times(
     }
     times.sort();
     times
+}
+
+/// 已到点的时刻允许补触发的窗口（秒）：轮询卡顿可补，错过太久（关机/休眠）不追溯。
+pub const FORCE_TRIGGER_WINDOW_SECS: i64 = 60;
+
+/// 轮询决策：给定“此刻”，算出该任务此刻应触发的日期组条目时刻及其去重键。
+/// - 触发点只能来自任务显式认领的组内条目，未认领任何条目则当天没有触发点；
+/// - 必须严格到达条目自身的时刻，不到点绝不触发；
+/// - 超出补触发窗口的时刻不再补跑；
+/// - 同一时刻靠 triggered_history 只触发一次。
+pub fn due_date_group_triggers(
+    now: chrono::NaiveDateTime,
+    groups: &[DateGroup],
+    target_group_ids: &[String],
+    fallback_time: chrono::NaiveTime,
+    claimed: &[String],
+    triggered_history: &[String],
+    task_id: &str,
+) -> Vec<(chrono::NaiveTime, String)> {
+    let day_times = get_force_trigger_times(now.date(), groups, target_group_ids, Some(fallback_time), claimed);
+    let mut due = Vec::new();
+    for ft in day_times {
+        let force_dt = chrono::NaiveDateTime::new(now.date(), ft);
+        if now < force_dt {
+            continue;
+        }
+        if now.signed_duration_since(force_dt).num_seconds() > FORCE_TRIGGER_WINDOW_SECS {
+            continue;
+        }
+        let trigger_key = format!(
+            "task_dategroup_{}_{}_{}",
+            now.format("%Y-%m-%d"),
+            ft.format("%H:%M:%S"),
+            task_id
+        );
+        if triggered_history.contains(&trigger_key) {
+            continue;
+        }
+        due.push((ft, trigger_key));
+    }
+    due
 }
 
 /// 兼容老接口
@@ -1007,6 +1062,7 @@ fn add_custom_task(
     recurrence: Option<RecurrenceRule>,
     date_group_ids: Option<Vec<String>>,
     date_group_mode: Option<String>,
+    date_group_entry_values: Option<Vec<String>>,
 ) -> Result<CustomTaskRule, String> {
     if name.trim().is_empty() {
         return Err("自定义任务名称不能为空".into());
@@ -1040,6 +1096,12 @@ fn add_custom_task(
     } else {
         date_group_mode.unwrap_or_else(|| "NONE".into()).trim().to_uppercase()
     };
+    let clean_entry_values: Vec<String> = date_group_entry_values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect();
 
     let rule = CustomTaskRule {
         id,
@@ -1057,6 +1119,7 @@ fn add_custom_task(
         recurrence,
         date_group_ids: clean_group_ids,
         date_group_mode: clean_mode,
+        date_group_entry_values: clean_entry_values,
     };
 
     let mut tasks = state.custom_tasks.lock().unwrap();
@@ -1079,6 +1142,7 @@ fn update_custom_task(
     recurrence: Option<RecurrenceRule>,
     date_group_ids: Option<Vec<String>>,
     date_group_mode: Option<String>,
+    date_group_entry_values: Option<Vec<String>>,
 ) -> Result<CustomTaskRule, String> {
     if name.trim().is_empty() {
         return Err("自定义任务名称不能为空".into());
@@ -1109,6 +1173,12 @@ fn update_custom_task(
     } else {
         date_group_mode.unwrap_or_else(|| "NONE".into()).trim().to_uppercase()
     };
+    let clean_entry_values: Vec<String> = date_group_entry_values
+        .unwrap_or_default()
+        .into_iter()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .collect();
 
     let mut tasks = state.custom_tasks.lock().unwrap();
     if let Some(task) = tasks.iter_mut().find(|t| t.id == id) {
@@ -1121,6 +1191,7 @@ fn update_custom_task(
         task.recurrence = recurrence;
         task.date_group_ids = clean_group_ids;
         task.date_group_mode = clean_mode;
+        task.date_group_entry_values = clean_entry_values;
         
         let updated = task.clone();
         save_custom_tasks_to_disk(&tasks);
@@ -1374,25 +1445,27 @@ fn start_background_scheduler(
                     }).unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
 
                     // 2. 任务线程控制：若任务设置了“遇特例日期组生效/触发”
-                    // 从日期组提取今日触发时刻（若日期组显式设定了具体时间则按该时间，未设时间则按任务自身配置时刻 task_time 触发）
+                    // 严格按条目自身的日期+时刻触发；当天条目按时刻升序后，任务只认领自己序号那一条
+                    // （序号 0 = 当天全部条目；条目未写时刻则回退按任务自身配置时刻 task_time）
                     let mut date_group_triggered_today = false;
                     if is_force && !task.date_group_ids.is_empty() {
-                        let force_times = get_force_trigger_times(now_date, &date_groups, &task.date_group_ids, Some(task_time));
-                        for ft in force_times {
-                            let force_dt = chrono::NaiveDateTime::new(now_date, ft);
+                        let due = due_date_group_triggers(
+                            now_naive,
+                            &date_groups,
+                            &task.date_group_ids,
+                            task_time,
+                            &task.date_group_entry_values,
+                            &task.triggered_history,
+                            &task.id,
+                        );
+                        for (ft, trigger_key) in due {
+                            task.triggered_history.push(trigger_key);
+                            date_group_triggered_today = true;
+                            should_save_custom = true;
+                            custom_updated = true;
                             let time_key = ft.format("%H:%M:%S").to_string();
-                            let trigger_key = format!("task_dategroup_{}_{}_{}", now_date_str, time_key, task.id);
-
-                            if now_naive >= force_dt && now_naive.signed_duration_since(force_dt).num_seconds() <= 60 {
-                                if !task.triggered_history.contains(&trigger_key) {
-                                    task.triggered_history.push(trigger_key);
-                                    date_group_triggered_today = true;
-                                    should_save_custom = true;
-                                    custom_updated = true;
-                                    let reason = format!("命中特例生效日期组时刻 ({})", time_key);
-                                    trigger_custom_task_actions(&app_handle, task, &reason);
-                                }
-                            }
+                            let reason = format!("命中特例生效日期组条目时刻 ({})", time_key);
+                            trigger_custom_task_actions(&app_handle, task, &reason);
                         }
                     }
 
@@ -1696,22 +1769,175 @@ mod tests {
 
         let oct_01 = NaiveDate::from_ymd_opt(2026, 10, 1).unwrap();
         // 显式设定时间的条目，优先采用组内精确指定的时刻 14:20:00
-        let times_oct_01 = get_force_trigger_times(oct_01, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        let claim_01 = vec!["2026/10/01 14:20:00".to_string()];
+        let times_oct_01 = get_force_trigger_times(oct_01, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()), &claim_01);
         assert_eq!(times_oct_01, vec![
             NaiveTime::from_hms_opt(14, 20, 0).unwrap(),
         ]);
 
         let oct_02 = NaiveDate::from_ymd_opt(2026, 10, 2).unwrap();
         // 未显式设定时间的条目，回退采用任务自身设定的时刻 09:30:00
-        let times_oct_02 = get_force_trigger_times(oct_02, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        let claim_02 = vec!["2026/10/02".to_string()];
+        let times_oct_02 = get_force_trigger_times(oct_02, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()), &claim_02);
         assert_eq!(times_oct_02, vec![
             NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
         ]);
 
         // 不在日期组内的日期（2026/10/03），不返回触发时刻
         let oct_03 = NaiveDate::from_ymd_opt(2026, 10, 3).unwrap();
-        let times_oct_03 = get_force_trigger_times(oct_03, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()));
+        let claim_all: Vec<String> = vec!["2026/10/01 14:20:00".into(), "2026/10/02".into()];
+        let times_oct_03 = get_force_trigger_times(oct_03, &groups, &target_ids, Some(NaiveTime::from_hms_opt(9, 30, 0).unwrap()), &claim_all);
         assert!(times_oct_03.is_empty());
+    }
+
+    fn matchday_group() -> DateGroup {
+        // 用户真实数据：一个“比赛日打卡”组被上班卡/下班卡两个任务共享，
+        // 每个比赛日的两条时刻各不相同（10/24 是 09:30 与 18:26，09/06 是 14:14 与 22:15）。
+        DateGroup {
+            id: "g_matchday".into(),
+            name: "比赛日打卡".into(),
+            description: None,
+            dates: vec![
+                "2026-10-24 09:30:00".into(),
+                "2026-10-24 18:26:19".into(),
+                "2026/09/06 14:14:21".into(),
+                "2026/09/06 22:15:00".into(),
+            ],
+            created_at: "".into(),
+        }
+    }
+
+    #[test]
+    fn test_claimed_entries_select_exact_trigger_points() {
+        let groups = vec![matchday_group()];
+        let ids = vec!["g_matchday".into()];
+        let fallback = Some(NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+        let oct_24 = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+
+        // 上班卡只认领当天那一条 -> 只有一个触发点
+        let morning_claim = vec!["2026-10-24 09:30:00".to_string()];
+        assert_eq!(
+            get_force_trigger_times(oct_24, &groups, &ids, fallback, &morning_claim),
+            vec![NaiveTime::from_hms_opt(9, 30, 0).unwrap()]
+        );
+
+        // 一个任务认领当天两条 -> 两个触发点（一天多条）
+        let two = vec![
+            "2026-10-24 09:30:00".to_string(),
+            "2026-10-24 18:26:19".to_string(),
+        ];
+        assert_eq!(
+            get_force_trigger_times(oct_24, &groups, &ids, fallback, &two),
+            vec![
+                NaiveTime::from_hms_opt(9, 30, 0).unwrap(),
+                NaiveTime::from_hms_opt(18, 26, 19).unwrap(),
+            ]
+        );
+
+        // 只认领别的日期的条目 -> 今天没有任何触发点
+        let other_day = vec!["2026/09/06 14:14:21".to_string()];
+        assert!(get_force_trigger_times(oct_24, &groups, &ids, fallback, &other_day).is_empty());
+
+        // 一条都没勾 = 不认领任何条目，当天没有触发点
+        assert!(get_force_trigger_times(oct_24, &groups, &ids, fallback, &[]).is_empty());
+
+        // 条目原文前后多空格仍算同一条
+        let dirty = vec!["  2026-10-24 09:30:00 ".to_string()];
+        assert_eq!(
+            get_force_trigger_times(oct_24, &groups, &ids, fallback, &dirty),
+            vec![NaiveTime::from_hms_opt(9, 30, 0).unwrap()]
+        );
+    }
+
+    /// 逐秒模拟调度线程跑完整一天，返回 (轮询时刻, 命中的条目时刻) 序列。
+    fn simulate_day(
+        groups: &[DateGroup],
+        ids: &[String],
+        day: NaiveDate,
+        fallback: NaiveTime,
+        claimed: &[String],
+        task_id: &str,
+    ) -> Vec<(NaiveDateTime, NaiveTime)> {
+        let day_start = day.and_hms_opt(0, 0, 0).unwrap();
+        let mut history: Vec<String> = Vec::new();
+        let mut fired = Vec::new();
+        for sec in 0..86_400 {
+            let now = day_start + chrono::Duration::seconds(sec);
+            for (ft, key) in due_date_group_triggers(now, groups, ids, fallback, claimed, &history, task_id) {
+                history.push(key);
+                fired.push((now, ft));
+            }
+        }
+        fired
+    }
+
+    #[test]
+    fn test_matchday_shared_group_full_day_simulation() {
+        let groups = vec![matchday_group()];
+        let ids = vec!["g_matchday".into()];
+        let fallback = NaiveTime::from_hms_opt(9, 0, 0).unwrap(); // 任务自身的“特例时刻” 09:00:00
+        let oct_24 = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let sep_06 = NaiveDate::from_ymd_opt(2026, 9, 6).unwrap();
+        let off_day = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+
+        let morning: Vec<String> = vec!["2026-10-24 09:30:00".into(), "2026/09/06 14:14:21".into()];
+        let evening: Vec<String> = vec!["2026-10-24 18:26:19".into(), "2026/09/06 22:15:00".into()];
+
+        // 10/24：上班卡全天只在 09:30:00 触发一次，下班卡全天只在 18:26:19 触发一次
+        assert_eq!(
+            simulate_day(&groups, &ids, oct_24, fallback, &morning, "custom_morning"),
+            vec![(oct_24.and_hms_opt(9, 30, 0).unwrap(), NaiveTime::from_hms_opt(9, 30, 0).unwrap())]
+        );
+        assert_eq!(
+            simulate_day(&groups, &ids, oct_24, fallback, &evening, "custom_evening"),
+            vec![(oct_24.and_hms_opt(18, 26, 19).unwrap(), NaiveTime::from_hms_opt(18, 26, 19).unwrap())]
+        );
+
+        // 09/06：同一对任务不改任何配置，各自跟着当天属于它的那条时刻
+        assert_eq!(
+            simulate_day(&groups, &ids, sep_06, fallback, &morning, "custom_morning"),
+            vec![(sep_06.and_hms_opt(14, 14, 21).unwrap(), NaiveTime::from_hms_opt(14, 14, 21).unwrap())]
+        );
+        assert_eq!(
+            simulate_day(&groups, &ids, sep_06, fallback, &evening, "custom_evening"),
+            vec![(sep_06.and_hms_opt(22, 15, 0).unwrap(), NaiveTime::from_hms_opt(22, 15, 0).unwrap())]
+        );
+
+        // 非比赛日：两个任务全天都不该出现
+        assert!(simulate_day(&groups, &ids, off_day, fallback, &morning, "custom_morning").is_empty());
+        assert!(simulate_day(&groups, &ids, off_day, fallback, &evening, "custom_evening").is_empty());
+
+        // 一条都没勾的任务：全天逐秒轮询也不该出现任何触发
+        let unclaimed = simulate_day(&groups, &ids, oct_24, fallback, &[], "custom_unclaimed");
+        assert!(unclaimed.is_empty());
+    }
+
+    #[test]
+    fn test_force_trigger_never_fires_early_or_twice() {
+        let groups = vec![matchday_group()];
+        let ids = vec!["g_matchday".into()];
+        let day = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let fallback = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let claimed = vec!["2026-10-24 09:30:00".to_string()];
+        let history: Vec<String> = Vec::new();
+
+        // 到点前 1 秒绝不触发
+        assert!(due_date_group_triggers(day.and_hms_opt(9, 29, 59).unwrap(), &groups, &ids, fallback, &claimed, &history, "t1").is_empty());
+        // 正好到点触发
+        let on_time = day.and_hms_opt(9, 30, 0).unwrap();
+        assert_eq!(due_date_group_triggers(on_time, &groups, &ids, fallback, &claimed, &history, "t1").len(), 1);
+        // 补触发窗口边界：60 秒内可补，超过 60 秒不再追溯（关机/休眠错过的时刻不补跑）
+        assert_eq!(due_date_group_triggers(day.and_hms_opt(9, 31, 0).unwrap(), &groups, &ids, fallback, &claimed, &history, "t1").len(), 1);
+        assert!(due_date_group_triggers(day.and_hms_opt(9, 31, 1).unwrap(), &groups, &ids, fallback, &claimed, &history, "t1").is_empty());
+
+        // 已记录触发的时刻，后续轮询不再重复；换一个任务仍会触发（去重键按任务区分）
+        let seen: Vec<String> = due_date_group_triggers(on_time, &groups, &ids, fallback, &claimed, &history, "t1")
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect();
+        assert!(!seen.is_empty());
+        assert!(due_date_group_triggers(day.and_hms_opt(9, 30, 30).unwrap(), &groups, &ids, fallback, &claimed, &seen, "t1").is_empty());
+        assert_eq!(due_date_group_triggers(on_time, &groups, &ids, fallback, &claimed, &seen, "t2").len(), 1);
     }
 
     #[test]

@@ -761,6 +761,15 @@ window.toggleRecurrenceUI = function(prefix = 'custom') {
     // 无论是常规循环，还是特例日期组生效触发，只要需要定时触发，就展示任务执行时刻输入框
     timeGroup.style.display = (selectedMode === "ONCE" && dgMode !== "FORCE_TRIGGER") ? "none" : "flex";
   }
+
+  if (prefix === "custom") {
+    const claimGroup = document.getElementById("customDateGroupClaimGroup");
+    if (claimGroup) {
+      const showClaims = dgMode === "FORCE_TRIGGER";
+      claimGroup.style.display = showClaims ? "block" : "none";
+      if (showClaims) renderCustomDateGroupClaims();
+    }
+  }
 };
 
 window.selectWeekdays = function(prefix, type) {
@@ -1045,7 +1054,7 @@ function renderDateGroupSelectors() {
     }
     return dateGroups.map(g => `
       <label class="date-group-chip-select">
-        <input type="checkbox" name="${prefix}DateGroupId" value="${g.id}">
+        <input type="checkbox" name="${prefix}DateGroupId" value="${g.id}"${prefix === "custom" ? ' onchange="renderCustomDateGroupClaims()"' : ''}>
         <span>🗓️ ${g.name} (${g.dates ? g.dates.length : 0}条日期)</span>
       </label>
     `).join("");
@@ -1053,6 +1062,7 @@ function renderDateGroupSelectors() {
 
   if (sysWrap) sysWrap.innerHTML = buildHtml("sys");
   if (customWrap) customWrap.innerHTML = buildHtml("custom");
+  renderCustomDateGroupClaims();
 }
 
 function renderDateGroupsList() {
@@ -1060,7 +1070,7 @@ function renderDateGroupsList() {
   if (!listWrap) return;
 
   if (dateGroups.length === 0) {
-    listWrap.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:16px;">暂未设置日期时间组，请点击上方“+ 新建日期时间组”进行创建</div>`;
+    listWrap.innerHTML = `<div style="font-size:12px; color:var(--text-muted); text-align:center; padding:16px;">暂未设置日期时间组，请点击上方“新建”进行创建</div>`;
     return;
   }
 
@@ -1076,7 +1086,7 @@ function renderDateGroupsList() {
           <button type="button" class="icon-btn danger" title="删除该组" onclick="deleteDateGroupItem('${g.id}')">🗑️</button>
         </div>
       </div>
-      <div class="chips-wrap" style="padding:6px; background:rgba(0,0,0,0.2); border-radius:6px;">
+      <div class="chips-wrap" style="padding:6px; background:rgba(0,0,0,0.2); border-radius: 4px;">
         ${(g.dates || []).map(d => `<span class="holiday-date-chip workday" style="font-size:11px;">📅 ${d}</span>`).join("")}
       </div>
     </div>
@@ -1110,13 +1120,13 @@ window.editDateGroupItem = (id) => {
   document.getElementById("dgDescInput").value = group.description || "";
   document.getElementById("dgDateItemInput").value = "";
   
-  const titleEl = document.querySelector("#createDateGroupCard h4");
+  const titleEl = document.getElementById("dateGroupEditTitle");
   if (titleEl) {
     titleEl.innerHTML = "✏️ 编辑日期时间组";
   }
   
   renderNewDgDateItems();
-  document.getElementById("createDateGroupCard").style.display = "block";
+  setDateGroupEditorVisible(true);
 };
 function openDateGroupModal() {
   fetchDateGroups();
@@ -1130,6 +1140,15 @@ function closeDateGroupModal() {
   if (modal) modal.classList.remove("active");
 }
 
+function setDateGroupEditorVisible(visible) {
+  const overlay = document.getElementById("dateGroupEditOverlay");
+  if (overlay) overlay.classList.toggle("active", visible);
+  if (visible) {
+    const nameInput = document.getElementById("dgNameInput");
+    if (nameInput) nameInput.focus();
+  }
+}
+
 function showCreateDateGroupForm() {
   editingDateGroupId = null;
   editingDateGroupItems = [];
@@ -1137,13 +1156,13 @@ function showCreateDateGroupForm() {
   document.getElementById("dgDescInput").value = "";
   document.getElementById("dgDateItemInput").value = "";
   
-  const titleEl = document.querySelector("#createDateGroupCard h4");
+  const titleEl = document.getElementById("dateGroupEditTitle");
   if (titleEl) {
     titleEl.innerHTML = "➕ 新增日期时间组";
   }
   
   renderNewDgDateItems();
-  document.getElementById("createDateGroupCard").style.display = "block";
+  setDateGroupEditorVisible(true);
 }
 
 function hideCreateDateGroupForm() {
@@ -1152,7 +1171,7 @@ function hideCreateDateGroupForm() {
   document.getElementById("dgNameInput").value = "";
   document.getElementById("dgDescInput").value = "";
   document.getElementById("dgDateItemInput").value = "";
-  document.getElementById("createDateGroupCard").style.display = "none";
+  setDateGroupEditorVisible(false);
 }
 
 function addDateItemToGroup() {
@@ -1230,7 +1249,7 @@ async function saveNewDateGroup() {
   }
 }
 
-function getGroupBadgeHtml(groupIds, mode) {
+function getGroupBadgeHtml(groupIds, mode, claimedValues) {
   if (!groupIds || groupIds.length === 0 || !mode || mode === "NONE") return "";
   const groupNames = groupIds.map(id => {
     const g = dateGroups.find(dg => dg.id === id);
@@ -1241,7 +1260,9 @@ function getGroupBadgeHtml(groupIds, mode) {
     return `<div class="date-group-badge exclude">🚫 遇例外组 [${groupNames}] 跳过不触发</div>`;
   }
   if (mode === "FORCE_TRIGGER") {
-    return `<div class="date-group-badge force">⚡ 遇特例组 [${groupNames}] 强制/临时触发</div>`;
+    const n = (claimedValues || []).length;
+    const scope = n > 0 ? `已认领 ${n} 条` : "未勾选条目·当天不触发";
+    return `<div class="date-group-badge force">⚡ 遇特例组 [${groupNames}] 按条目时刻触发 · ${scope}</div>`;
   }
   return "";
 }
@@ -1403,6 +1424,76 @@ function renderTaskList() {
   }).join("");
 }
 
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+// 与后端 entry_claimed 一致：只有被显式勾选的条目才算认领，一条都没勾则当天不触发
+function dateGroupEntryClaimed(claimedValues, item) {
+  const v = (item || "").trim();
+  return (claimedValues || []).some(c => (c || "").trim() === v);
+}
+
+// 编辑回填用：渲染认领清单时强制勾选这些条目原文，渲染一次后清空
+let claimedSnapshotForRender = null;
+
+function getClaimedEntryValues() {
+  return Array.from(document.querySelectorAll("input[name='customDateGroupEntry']:checked"))
+    .map(cb => cb.value.trim())
+    .filter(v => v.length > 0);
+}
+
+// 按已勾选的日期组展开条目清单，供任务逐条认领归属
+function renderCustomDateGroupClaims() {
+  const wrap = document.getElementById("customDateGroupClaims");
+  if (!wrap) return;
+
+  const checked = new Set(
+    (claimedSnapshotForRender === null
+      ? Array.from(wrap.querySelectorAll("input[name='customDateGroupEntry']:checked")).map(cb => cb.value.trim())
+      : claimedSnapshotForRender.map(v => (v || "").trim())
+    ).filter(Boolean)
+  );
+  claimedSnapshotForRender = null;
+
+  const groups = Array.from(document.querySelectorAll('input[name="customDateGroupId"]:checked'))
+    .map(cb => dateGroups.find(g => g.id === cb.value))
+    .filter(Boolean);
+
+  if (groups.length === 0) {
+    wrap.innerHTML = `<span class="date-claims-empty">请先在上方勾选要关联的日期时间组</span>`;
+    return;
+  }
+
+  const claimRow = (d, extraClass) => `
+    <label class="date-claim-item ${extraClass}">
+      <input type="checkbox" name="customDateGroupEntry" value="${escapeHtml(d)}" ${checked.has(d.trim()) ? "checked" : ""} />
+      <span>📅 ${escapeHtml(d)}</span>
+    </label>`;
+
+  const allValues = groups.flatMap(g => g.dates || []);
+  // 组里已被改名或删除的认领条目仍然列出并标红，不静默失效
+  const stale = [...checked].filter(v => !allValues.some(d => (d || "").trim() === v));
+
+  wrap.innerHTML = groups.map(g => `
+    <div class="date-claims-block">
+      <span class="date-claims-title">🗓️ ${g.name}</span>
+      ${(g.dates || []).map(d => claimRow(d, "")).join("")}
+    </div>`).join("") +
+    (stale.length ? `
+    <div class="date-claims-block">
+      <span class="date-claims-title">⚠️ 认领的条目已不在组内（改名或删除），请重新勾选</span>
+      ${stale.map(d => claimRow(d, "stale")).join("")}
+    </div>` : "");
+}
+
+// 供日期组芯片的内联 onchange 调用
+window.renderCustomDateGroupClaims = renderCustomDateGroupClaims;
+
 function isDateExcludedInGroups(dateObj, groupIds) {
   if (!groupIds || groupIds.length === 0 || !Array.isArray(dateGroups)) return false;
   const y = dateObj.getFullYear();
@@ -1539,6 +1630,8 @@ function getNextTriggerDateForCustomTask(task) {
       const group = dateGroups.find(g => (g.id || '').trim().toLowerCase() === (gid || '').trim().toLowerCase());
       if (!group || !group.dates) continue;
       for (const item of group.dates) {
+        // 与后端一致：只统计本任务显式勾选认领的条目（未勾选则当天没有触发点）
+        if (!dateGroupEntryClaimed(task.date_group_entry_values, item)) continue;
         const trimmed = item.trim().replace(/\//g, "-");
         const rangeSplit = trimmed.includes("~") ? trimmed.split("~") :
                            trimmed.includes("至") ? trimmed.split("至") :
@@ -1628,6 +1721,7 @@ async function handleAddCustomTask(e) {
   const checkedGroupCbs = document.querySelectorAll('input[name="customDateGroupId"]:checked');
   const dateGroupIds = Array.from(checkedGroupCbs).map(cb => cb.value);
   const dateGroupMode = document.querySelector('input[name="customDateGroupMode"]:checked')?.value || "NONE";
+  const dateGroupEntryValues = dateGroupMode === "FORCE_TRIGGER" ? getClaimedEntryValues() : [];
 
   if (dateGroupMode !== "NONE" && dateGroupIds.length === 0) {
     showCustomAlert("您已选择特例日期组模式（跳过或强制触发），请勾选至少一个日期时间组！");
@@ -1673,7 +1767,8 @@ async function handleAddCustomTask(e) {
         alwaysOnTop,
         recurrence,
         dateGroupIds,
-        dateGroupMode
+        dateGroupMode,
+        dateGroupEntryValues
       });
       appendLog(`已成功更新自主高级任务规则: [${name}]`, "success");
     } else {
@@ -1686,7 +1781,8 @@ async function handleAddCustomTask(e) {
         alwaysOnTop,
         recurrence,
         dateGroupIds,
-        dateGroupMode
+        dateGroupMode,
+        dateGroupEntryValues
       });
       const recurLabel = formatRecurrenceText(recurrence);
       appendLog(`已成功保存自主高级任务规则: [${name}] ${recurLabel ? `(${recurLabel})` : ''}`, "success");
@@ -1810,6 +1906,7 @@ window.editCustomTask = (id) => {
   const mode = task.date_group_mode || "NONE";
   const dgModeRadio = document.querySelector(`input[name="customDateGroupMode"][value="${mode}"]`);
   if (dgModeRadio) dgModeRadio.checked = true;
+  claimedSnapshotForRender = [...(task.date_group_entry_values || [])];
   toggleRecurrenceUI('custom');
 
   // Change submit button and add cancel button
@@ -1861,6 +1958,8 @@ window.cancelEditCustomTask = () => {
   document.querySelectorAll('input[name="customDateGroupId"]').forEach(cb => cb.checked = false);
   const dgModeRadio = document.querySelector(`input[name="customDateGroupMode"][value="NONE"]`);
   if (dgModeRadio) dgModeRadio.checked = true;
+  claimedSnapshotForRender = [];
+  renderCustomDateGroupClaims();
 
   const submitBtn = document.getElementById("submitCustomBtn");
   submitBtn.innerHTML = "<span>保存自主高级规则</span>";
@@ -1933,7 +2032,7 @@ function renderCustomTaskList() {
     const nextTriggerDate = getNextTriggerDateForCustomTask(task);
     const nextTriggerStr = nextTriggerDate ? formatDatetimeString(nextTriggerDate) : null;
     const countdownText = nextTriggerStr ? calculateCountdown(nextTriggerStr) : null;
-    const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode);
+    const groupBadge = getGroupBadgeHtml(task.date_group_ids, task.date_group_mode, task.date_group_entry_values);
     const isExcludedToday = task.is_enabled &&
       (task.date_group_mode || "").toUpperCase() === "EXCLUDE" &&
       isDateExcludedInGroups(new Date(), task.date_group_ids);
@@ -1971,6 +2070,47 @@ function renderCustomTaskList() {
       </div>
     `;
   }).join("");
+}
+
+// ----------------- 日志终端高度拖动 -----------------
+const LOG_MIN_HEIGHT = 120;
+
+function initLogResizers() {
+  document.querySelectorAll(".log-resize-handle").forEach(handle => {
+    const term = document.getElementById(handle.getAttribute("data-log-target"));
+    if (!term) return;
+
+    const storeKey = `logHeight:${term.id}`;
+    const saved = parseInt(localStorage.getItem(storeKey) || "", 10);
+    if (saved >= LOG_MIN_HEIGHT) term.style.height = `${saved}px`;
+
+    let dragging = false;
+    let startY = 0;
+    let startH = 0;
+
+    handle.addEventListener("mousedown", (e) => {
+      dragging = true;
+      startY = e.clientY;
+      startH = term.offsetHeight;
+      document.body.classList.add("log-resizing");
+      e.preventDefault();
+    });
+
+    window.addEventListener("mousemove", (e) => {
+      if (!dragging) return;
+      // 往上拖增高：拖动增量取 Y 的反向
+      const maxH = Math.max(LOG_MIN_HEIGHT, window.innerHeight - 220);
+      const h = Math.min(Math.max(LOG_MIN_HEIGHT, startH + (startY - e.clientY)), maxH);
+      term.style.height = `${h}px`;
+    });
+
+    window.addEventListener("mouseup", () => {
+      if (!dragging) return;
+      dragging = false;
+      document.body.classList.remove("log-resizing");
+      localStorage.setItem(storeKey, String(term.offsetHeight));
+    });
+  });
 }
 
 // ----------------- 时钟与初始化 -----------------
@@ -2044,6 +2184,7 @@ window.addEventListener("DOMContentLoaded", () => {
 
   initDefaultTime();
   startClocks();
+  initLogResizers();
 
   setTimeout(() => {
     fetchHolidayCalendar();

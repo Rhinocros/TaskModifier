@@ -153,7 +153,19 @@
         </form>
       </section>
 
-      <!-- Right Column: Task List & Logs -->
+      <!-- Logs Card：左栏底部，按住上沿可上下拖动调整高度 -->
+      <div class="card logs-card">
+        <div class="log-resize-handle" data-log-target="logTerminal" title="按住上下拖动调整日志区高度"></div>
+        <div class="card-header">
+          <h2><span class="icon">💻</span> 调度日志终端</h2>
+          <button class="text-btn" onclick="clearLogs()">清空日志</button>
+        </div>
+        <div class="log-terminal" id="logTerminal">
+          <div class="log-entry system">[系统准备就绪] 调度监视器服务已在后台高精度运行（点击关闭窗口将最小化至托盘）...</div>
+        </div>
+      </div>
+
+      <!-- Right Column: Task List -->
       <section class="right-column">
         <!-- Task Queue Card -->
         <div class="card list-card">
@@ -166,17 +178,6 @@
             <div class="empty-state">
               <p>暂无排期的修改任务，请在左侧添加规则</p>
             </div>
-          </div>
-        </div>
-
-        <!-- Logs Card -->
-        <div class="card logs-card">
-          <div class="card-header">
-            <h2><span class="icon">💻</span> 调度日志终端</h2>
-            <button class="text-btn" onclick="clearLogs()">清空日志</button>
-          </div>
-          <div class="log-terminal" id="logTerminal">
-            <div class="log-entry system">[系统准备就绪] 调度监视器服务已在后台高精度运行（点击关闭窗口将最小化至托盘）...</div>
           </div>
         </div>
       </section>
@@ -280,7 +281,7 @@
                 <!-- 循环与特例执行时刻选择器 -->
                 <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
                   <label for="customTimeOfDay">任务执行时刻 (HH:mm:ss)</label>
-                  <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius:6px; color:#fff;" />
+                  <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius: 4px; color:#fff;" />
                   <span class="help-text" style="font-size:11px; color:var(--text-muted);">循环模式或特例日期组生效时，任务线程到达此精确时刻触发执行</span>
                 </div>
               </div>
@@ -353,10 +354,17 @@
                   <input type="radio" name="customDateGroupMode" value="FORCE_TRIGGER" onchange="toggleRecurrenceUI('custom')" />
                   <div>
                     <span class="title">⚡ 遇选中日期组：特例生效触发</span>
-                    <span class="desc">任务线程控制：若今日属于所选日期组，在任务设定的时刻执行。多个任务可共享同一日期组并在各自时间独立运行。</span>
+                    <span class="desc">任务线程控制：触发点取自日期组条目自身的日期与时刻，不到点不执行。多个任务共享同一日期组时，用下方“认领条目”区分归属。</span>
                   </div>
                 </label>
               </div>
+            </div>
+
+            <!-- 条目级认领：共享同一日期组的任务各自勾选自己负责的条目 -->
+            <div class="form-group" id="customDateGroupClaimGroup" style="display:none;">
+              <label>认领的日期时间条目 (不勾选 = 当天不触发)</label>
+              <div id="customDateGroupClaims" class="date-claims-wrap"></div>
+              <span class="help-text">每个任务只在自己勾选的那条日期+时刻触发，不到点不执行；一条都不勾则该任务当天没有任何触发点。</span>
             </div>
           </div>
 
@@ -395,6 +403,18 @@
         </form>
       </section>
 
+      <!-- Logs Card：左栏底部，按住上沿可上下拖动调整高度 -->
+      <div class="card logs-card">
+        <div class="log-resize-handle" data-log-target="logTerminalCustom" title="按住上下拖动调整日志区高度"></div>
+        <div class="card-header">
+          <h2><span class="icon">💻</span> 调度日志终端</h2>
+          <button class="text-btn" onclick="clearLogs()">清空日志</button>
+        </div>
+        <div class="log-terminal" id="logTerminalCustom">
+          <div class="log-entry system">[系统准备就绪] 自主高级任务监视器已在后台运行...</div>
+        </div>
+      </div>
+
       <!-- Right Column: Custom Tasks List -->
       <section class="right-column">
         <div class="card list-card">
@@ -407,17 +427,6 @@
             <div class="empty-state">
               <p>暂无自主高级任务，请在左侧配置并保存规则</p>
             </div>
-          </div>
-        </div>
-
-        <!-- Logs Card -->
-        <div class="card logs-card">
-          <div class="card-header">
-            <h2><span class="icon">💻</span> 调度日志终端</h2>
-            <button class="text-btn" onclick="clearLogs()">清空日志</button>
-          </div>
-          <div class="log-terminal" id="logTerminalCustom">
-            <div class="log-entry system">[系统准备就绪] 自主高级任务监视器已在后台运行...</div>
           </div>
         </div>
       </section>
@@ -512,38 +521,13 @@
           <div class="modal-icon-box warning" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🗓️</div>
           <div>
             <h3 class="modal-title">自定义日期时间组管理</h3>
-            <span style="font-size:11px; color:#a1a1aa;">可设置日期、具体时刻或日期区间，供多个任务共享读取引用</span>
+            <span style="font-size:11px; color:#a1a1aa;">可设置日期、具体时刻或日期区间，供多个任务共享读取引用；任务在规则里逐条认领自己负责的时刻</span>
           </div>
         </div>
-        <button type="button" class="add-btn" id="showCreateGroupBtn">+ 新建日期时间组</button>
+        <button type="button" class="add-btn" id="showCreateGroupBtn">新建</button>
       </div>
 
       <div class="modal-body" style="display:flex; flex-direction:column; gap:16px;">
-        <!-- 新建/编辑日期组表单卡片 (默认隐藏) -->
-        <div id="createDateGroupCard" class="sub-card-box" style="display:none; background: rgba(24, 24, 27, 0.9); border: 1px solid var(--card-border); border-radius: 8px; padding: 14px;">
-          <h4 style="font-size:13px; font-weight:600; margin-bottom:10px; color:#38bdf8;">➕ 新增日期时间组</h4>
-          <div style="display:flex; flex-direction:column; gap:10px;">
-            <input type="text" id="dgNameInput" placeholder="组名称 (例如: 公司集中封板期 / 运维窗口)" class="input-styled" />
-            <input type="text" id="dgDescInput" placeholder="备注说明 (可选)" class="input-styled" />
-            
-            <div style="display:flex; gap:8px;">
-              <div class="custom-datetime-wrapper" style="flex:1;">
-                <input type="text" id="dgDateItemInput" placeholder="添加日期与时间 (例: 2026/10/01 08:30:00 或 2026/10/01 ~ 2026/10/07)" class="holiday-date-input" style="width:100%;" />
-              </div>
-              <button type="button" class="preset-btn" id="addDgDateItemBtn" style="white-space: nowrap;">+ 添加到本组</button>
-            </div>
-
-            <div id="dgDateItemsContainer" class="chips-wrap" style="min-height:42px; padding:8px; background:rgba(0,0,0,0.3); border-radius:6px; border:1px solid rgba(255,255,255,0.05);">
-              <span style="font-size:12px; color:var(--text-muted); align-self:center;">尚未添加日期条目</span>
-            </div>
-
-            <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:6px;">
-              <button type="button" class="modal-btn secondary" id="hideCreateGroupBtn">取消</button>
-              <button type="button" class="modal-btn primary" id="saveDateGroupBtn">保存此日期组</button>
-            </div>
-          </div>
-        </div>
-
         <!-- 日期时间组列表 -->
         <div id="dateGroupsListContainer" class="date-groups-grid">
           <!-- 动态插入各个日期组卡片 -->
@@ -552,6 +536,40 @@
 
       <div class="modal-footer">
         <button type="button" class="modal-btn secondary" id="closeDateGroupModalBtn">关闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Date Group Editor Modal Overlay：新建与编辑都在这个独立界面完成，不再挤在列表上方 -->
+  <div id="dateGroupEditOverlay" class="modal-overlay">
+    <div class="modal-card" style="max-width: 560px; width: 92%;">
+      <div class="modal-header">
+        <div class="modal-icon-box warning" style="background: rgba(56, 189, 248, 0.15); color: #38bdf8;">🗓️</div>
+        <div>
+          <h3 class="modal-title" id="dateGroupEditTitle">➕ 新增日期时间组</h3>
+          <span style="font-size:11px; color:#a1a1aa;">条目可写日期、日期+时刻，或用 ~ 写成日期区间</span>
+        </div>
+      </div>
+
+      <div class="modal-body" style="display:flex; flex-direction:column; gap:10px;">
+        <input type="text" id="dgNameInput" placeholder="组名称 (例如: 公司集中封板期 / 运维窗口)" class="input-styled" />
+        <input type="text" id="dgDescInput" placeholder="备注说明 (可选)" class="input-styled" />
+
+        <div style="display:flex; gap:8px;">
+          <div class="custom-datetime-wrapper" style="flex:1;">
+            <input type="text" id="dgDateItemInput" placeholder="添加日期与时间 (例: 2026-10-01 08:30:00 或 2026-10-01 ~ 2026-10-07)" class="holiday-date-input" style="width:100%;" />
+          </div>
+          <button type="button" class="preset-btn" id="addDgDateItemBtn" style="white-space: nowrap;">+ 添加到本组</button>
+        </div>
+
+        <div id="dgDateItemsContainer" class="chips-wrap" style="min-height:42px; max-height:240px; overflow-y:auto; padding:8px; background:rgba(0,0,0,0.3); border-radius: 4px; border:1px solid rgba(255,255,255,0.05);">
+          <span style="font-size:12px; color:var(--text-muted); align-self:center;">尚未添加日期条目</span>
+        </div>
+      </div>
+
+      <div class="modal-footer" style="justify-content:flex-end;">
+        <button type="button" class="modal-btn secondary" id="hideCreateGroupBtn">取消</button>
+        <button type="button" class="modal-btn primary" id="saveDateGroupBtn">保存此日期组</button>
       </div>
     </div>
   </div>
