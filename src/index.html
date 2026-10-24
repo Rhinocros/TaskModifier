@@ -280,9 +280,9 @@
 
                 <!-- 循环与特例执行时刻选择器 -->
                 <div id="customTimeOfDayGroup" style="display:none; flex-direction:column; gap:4px;">
-                  <label for="customTimeOfDay">任务执行时刻 (HH:mm:ss)</label>
-                  <input type="time" id="customTimeOfDay" value="09:00:00" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius: 4px; color:#fff;" />
-                  <span class="help-text" style="font-size:11px; color:var(--text-muted);">循环模式或特例日期组生效时，任务线程到达此精确时刻触发执行</span>
+                  <label for="customTimeOfDay" id="customTimeOfDayLabel">任务执行时刻 (HH:mm:ss)</label>
+                  <input type="time" id="customTimeOfDay" step="1" style="width:100%; padding:8px; background:rgba(24,24,27,0.7); border:1px solid var(--card-border); border-radius: 4px; color:#fff;" />
+                  <span class="help-text" id="customTimeOfDayHelp" style="font-size:11px; color:var(--text-muted);">循环模式下，任务线程到达此精确时刻触发执行</span>
                 </div>
               </div>
             </div>

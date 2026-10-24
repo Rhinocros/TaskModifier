@@ -744,6 +744,39 @@ window.initMonthdaysOptions = function() {
   wrap.innerHTML = html;
 };
 
+// 条目自身是否带了时刻。口径与引擎一致：区间条目（~ / 至 / 到 / " - "）一律视为不带时刻
+function dateEntryHasTime(item) {
+  const t = (item || "").trim();
+  if (t.includes("~") || t.includes("至") || t.includes("到") || t.includes(" - ")) return false;
+  const seg = t.split(/[\sT]+/)[1] || "";
+  return seg.includes(":");
+}
+
+// 只有“特例强制触发 + 认领了未写时刻的条目”时，才需要任务自己的回退时刻
+function claimsNeedFallbackTime() {
+  const dgMode = document.querySelector('input[name="customDateGroupMode"]:checked')?.value || "NONE";
+  if (dgMode !== "FORCE_TRIGGER") return false;
+  return getClaimedEntryValues().some(v => !dateEntryHasTime(v));
+}
+
+// 特例触发只在“认领了未写时刻的条目”时才需要回退时刻；其余情况按循环模式决定
+function syncCustomTimeOfDayField() {
+  const timeGroup = document.getElementById("customTimeOfDayGroup");
+  if (!timeGroup) return;
+  const selectedMode = document.querySelector('input[name="customRecurrenceMode"]:checked')?.value || "ONCE";
+  const dgMode = document.querySelector('input[name="customDateGroupMode"]:checked')?.value || "NONE";
+  const needFallback = selectedMode === "ONCE" && dgMode === "FORCE_TRIGGER" && claimsNeedFallbackTime();
+
+  timeGroup.style.display = (selectedMode !== "ONCE" || needFallback) ? "flex" : "none";
+
+  const label = document.getElementById("customTimeOfDayLabel");
+  const help = document.getElementById("customTimeOfDayHelp");
+  if (label) label.textContent = needFallback ? "回退时刻 (仅用于未写时刻的认领条目)" : "任务执行时刻 (HH:mm:ss)";
+  if (help) help.textContent = needFallback
+    ? "认领的条目里有纯日期或日期区间（没写时刻）时才需要；留空则那些条目当天不触发。"
+    : "循环模式下，任务线程到达此精确时刻触发执行";
+}
+
 window.toggleRecurrenceUI = function(prefix = 'custom') {
   const selectedMode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
   const dgMode = document.querySelector(`input[name="${prefix}DateGroupMode"]:checked`)?.value || "NONE";
@@ -756,19 +789,20 @@ window.toggleRecurrenceUI = function(prefix = 'custom') {
   const activePanel = document.getElementById(`${prefix}Panel${selectedMode}`);
   if (activePanel) activePanel.classList.add('active');
 
-  const timeGroup = document.getElementById(`${prefix}TimeOfDayGroup`);
-  if (timeGroup) {
-    // 无论是常规循环，还是特例日期组生效触发，只要需要定时触发，就展示任务执行时刻输入框
-    timeGroup.style.display = (selectedMode === "ONCE" && dgMode !== "FORCE_TRIGGER") ? "none" : "flex";
-  }
-
   if (prefix === "custom") {
     const claimGroup = document.getElementById("customDateGroupClaimGroup");
+    const showClaims = dgMode === "FORCE_TRIGGER";
     if (claimGroup) {
-      const showClaims = dgMode === "FORCE_TRIGGER";
       claimGroup.style.display = showClaims ? "block" : "none";
       if (showClaims) renderCustomDateGroupClaims();
     }
+    syncCustomTimeOfDayField();
+    return;
+  }
+
+  const timeGroup = document.getElementById(`${prefix}TimeOfDayGroup`);
+  if (timeGroup) {
+    timeGroup.style.display = selectedMode === "ONCE" ? "none" : "flex";
   }
 };
 
@@ -795,17 +829,14 @@ function getRecurrenceRuleFromUI(prefix = 'custom') {
   const mode = document.querySelector(`input[name="${prefix}RecurrenceMode"]:checked`)?.value || "ONCE";
   const dgMode = document.querySelector(`input[name="${prefix}DateGroupMode"]:checked`)?.value || "NONE";
   const timeOfDayInput = document.getElementById(`${prefix}TimeOfDay`);
-  let time_of_day = timeOfDayInput ? timeOfDayInput.value : "09:00:00";
+  let time_of_day = timeOfDayInput ? timeOfDayInput.value : "";
   if (time_of_day && time_of_day.length === 5) time_of_day += ":00";
 
   if (mode === "ONCE") {
-    if (dgMode === "FORCE_TRIGGER") {
-      return {
-        mode: "ONCE",
-        days_of_week: [],
-        days_of_month: [],
-        time_of_day: time_of_day || "09:00:00"
-      };
+    // 纯特例触发：只有当前确实需要回退时刻（勾了未写时刻的条目）才存这个值，
+    // 否则忽略输入框里可能残留的旧默认值，也不再凭空写 09:00:00
+    if (dgMode === "FORCE_TRIGGER" && time_of_day && claimsNeedFallbackTime()) {
+      return { mode: "ONCE", days_of_week: [], days_of_month: [], time_of_day };
     }
     return null;
   }
@@ -834,7 +865,7 @@ function formatRecurrenceText(rule) {
   if (!rule) return "";
   const timeStr = rule.time_of_day || "";
   if (rule.mode === "ONCE") {
-    return timeStr ? `特例时刻: ${timeStr}` : "";
+    return timeStr ? `回退时刻: ${timeStr}` : "";
   }
 
   if (rule.mode === "DAILY") {
@@ -1471,7 +1502,7 @@ function renderCustomDateGroupClaims() {
 
   const claimRow = (d, extraClass) => `
     <label class="date-claim-item ${extraClass}">
-      <input type="checkbox" name="customDateGroupEntry" value="${escapeHtml(d)}" ${checked.has(d.trim()) ? "checked" : ""} />
+      <input type="checkbox" name="customDateGroupEntry" value="${escapeHtml(d)}" ${checked.has(d.trim()) ? "checked" : ""} onchange="syncCustomTimeOfDayField()" />
       <span>📅 ${escapeHtml(d)}</span>
     </label>`;
 
@@ -1491,8 +1522,9 @@ function renderCustomDateGroupClaims() {
     </div>` : "");
 }
 
-// 供日期组芯片的内联 onchange 调用
+// 供日期组芯片与条目复选框的内联事件调用
 window.renderCustomDateGroupClaims = renderCustomDateGroupClaims;
+window.syncCustomTimeOfDayField = syncCustomTimeOfDayField;
 
 function isDateExcludedInGroups(dateObj, groupIds) {
   if (!groupIds || groupIds.length === 0 || !Array.isArray(dateGroups)) return false;
@@ -1620,11 +1652,13 @@ function getNextTriggerDateForCustomTask(task) {
 
   // 3. 检查特例触发组 (FORCE_TRIGGER)：精确提取组内设定的日期和时间
   if (task.date_group_mode === "FORCE_TRIGGER" && task.date_group_ids && task.date_group_ids.length > 0 && Array.isArray(dateGroups)) {
-    const defaultTime = (task.recurrence && task.recurrence.time_of_day) ? task.recurrence.time_of_day : "09:00:00";
-    const parts = defaultTime.split(":");
+    const fallbackTime = (task.recurrence && task.recurrence.time_of_day) ? task.recurrence.time_of_day : "";
+    const parts = fallbackTime.split(":");
     const defH = parseInt(parts[0] || "0");
     const defM = parseInt(parts[1] || "0");
     const defS = parseInt(parts[2] || "0");
+    // 与引擎一致：没写回退时刻时，未带时刻的条目不产生触发点
+    const hasFallback = !!fallbackTime;
 
     for (const gid of task.date_group_ids) {
       const group = dateGroups.find(g => (g.id || '').trim().toLowerCase() === (gid || '').trim().toLowerCase());
@@ -1638,6 +1672,7 @@ function getNextTriggerDateForCustomTask(task) {
                            trimmed.includes("到") ? trimmed.split("到") :
                            trimmed.includes(" - ") ? trimmed.split(" - ") : null;
         if (rangeSplit && rangeSplit.length === 2) {
+          if (!hasFallback) continue; // 区间条目只能按回退时刻，没有回退时刻就没有触发点
           const s = parseCustomDate(rangeSplit[0].trim());
           const e = parseCustomDate(rangeSplit[1].trim());
           if (s && e) {
@@ -1655,7 +1690,8 @@ function getNextTriggerDateForCustomTask(task) {
         } else {
           const itemDate = parseCustomDate(trimmed);
           if (itemDate) {
-            const hasExplicitTime = (trimmed.includes(" ") || trimmed.includes("T")) && (trimmed.split(/[\sT]/)[1] || "").includes(":");
+            const hasExplicitTime = dateEntryHasTime(trimmed);
+            if (!hasExplicitTime && !hasFallback) continue;
             const cand = hasExplicitTime
               ? itemDate
               : new Date(itemDate.getFullYear(), itemDate.getMonth(), itemDate.getDate(), defH, defM, defS);
@@ -1725,6 +1761,17 @@ async function handleAddCustomTask(e) {
 
   if (dateGroupMode !== "NONE" && dateGroupIds.length === 0) {
     showCustomAlert("您已选择特例日期组模式（跳过或强制触发），请勾选至少一个日期时间组！");
+    return;
+  }
+
+  // 循环模式必须有循环点；时刻留空只允许用在“条目自带时刻”的特例触发上
+  if (recurrence && recurrence.mode !== "ONCE" && !recurrence.time_of_day) {
+    showCustomAlert("循环模式需要填写任务执行时刻，请把上方“任务执行时刻”补齐后再保存。");
+    return;
+  }
+
+  if (dateGroupMode === "FORCE_TRIGGER" && dateGroupEntryValues.length === 0) {
+    showCustomAlert("特例生效触发需要至少勾选一条“认领的日期时间条目”，否则该任务当天不会有任何触发点。");
     return;
   }
 
@@ -1805,6 +1852,8 @@ window.editCustomTask = (id) => {
   customAlwaysOnTopInput.checked = task.always_on_top;
 
   // Restore recurrence
+  const timeOfDayInput = document.getElementById("customTimeOfDay");
+  if (timeOfDayInput) timeOfDayInput.value = (task.recurrence && task.recurrence.time_of_day) || "";
   if (task.recurrence) {
     const r = task.recurrence;
     const modeRadio = document.querySelector(`input[name="customRecurrenceMode"][value="${r.mode}"]`);
@@ -1942,6 +1991,9 @@ window.cancelEditCustomTask = () => {
     modeRadio.checked = true;
     toggleRecurrenceUI('custom');
   }
+
+  const timeOfDayInput = document.getElementById("customTimeOfDay");
+  if (timeOfDayInput) timeOfDayInput.value = "";
 
   enableWindowsContainer.innerHTML = '';
   addEnableWindowRow();

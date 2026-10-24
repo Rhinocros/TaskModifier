@@ -321,7 +321,8 @@ fn entry_claimed(claimed: &[String], item: &str) -> bool {
 /// 提取指定日期在关联特例日期组中所设定的全部触发时刻（已按时间升序去重）：
 /// - 只统计任务显式认领的条目，未认领任何条目则当天没有触发点；
 /// - 若条目显式设定了具体时间（例如 08:30:00），提取该具体时刻；
-/// - 若未显式设定时间（仅写了日期或为日期区间），回退采用任务自身设定的时刻（fallback_time）。
+/// - 若未显式设定时间（仅写了日期或为日期区间），回退采用任务自身设定的时刻（fallback_time）；
+///   没有回退时刻时该条目当天不产生触发点，不再默认按 09:00 执行。
 pub fn get_force_trigger_times(
     date: chrono::NaiveDate,
     groups: &[DateGroup],
@@ -345,20 +346,20 @@ pub fn get_force_trigger_times(
                     match parsed {
                         ParsedDateEntry::DateRange { start, end } => {
                             if date >= start && date <= end {
-                                let t = fallback_time.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
-                                if !times.contains(&t) {
-                                    times.push(t);
+                                // 区间条目自身不带时刻，只能按任务回退时刻；没给回退时刻就没有触发点
+                                if let Some(t) = fallback_time {
+                                    if !times.contains(&t) {
+                                        times.push(t);
+                                    }
                                 }
                             }
                         }
                         ParsedDateEntry::SingleDate { date: d, time } => {
                             if d == date {
-                                let t = match time {
-                                    Some(explicit_t) => explicit_t,
-                                    None => fallback_time.unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap()),
-                                };
-                                if !times.contains(&t) {
-                                    times.push(t);
+                                if let Some(t) = time.or(fallback_time) {
+                                    if !times.contains(&t) {
+                                        times.push(t);
+                                    }
                                 }
                             }
                         }
@@ -383,12 +384,12 @@ pub fn due_date_group_triggers(
     now: chrono::NaiveDateTime,
     groups: &[DateGroup],
     target_group_ids: &[String],
-    fallback_time: chrono::NaiveTime,
+    fallback_time: Option<chrono::NaiveTime>,
     claimed: &[String],
     triggered_history: &[String],
     task_id: &str,
 ) -> Vec<(chrono::NaiveTime, String)> {
-    let day_times = get_force_trigger_times(now.date(), groups, target_group_ids, Some(fallback_time), claimed);
+    let day_times = get_force_trigger_times(now.date(), groups, target_group_ids, fallback_time, claimed);
     let mut due = Vec::new();
     for ft in day_times {
         let force_dt = chrono::NaiveDateTime::new(now.date(), ft);
@@ -1435,14 +1436,15 @@ fn start_background_scheduler(
                         continue; // 任务线程在此处直接跳过，本任务今日不执行任何动作
                     }
 
-                    // 获取任务自身配置的执行时刻（由任务自身控制什么时候执行，绝不从日期组取时间）
+                    // 任务自身的执行时刻：循环模式下是循环点，特例触发下只作为
+                    // “认领条目未写时刻”的回退点；留空则不带时刻的条目当天不触发
                     let task_time = task.recurrence.as_ref().and_then(|r| {
                         if !r.time_of_day.is_empty() {
                             parse_flexible_time(&r.time_of_day)
                         } else {
                             None
                         }
-                    }).unwrap_or_else(|| chrono::NaiveTime::from_hms_opt(9, 0, 0).unwrap());
+                    });
 
                     // 2. 任务线程控制：若任务设置了“遇特例日期组生效/触发”
                     // 严格按条目自身的日期+时刻触发；当天条目按时刻升序后，任务只认领自己序号那一条
@@ -1854,7 +1856,7 @@ mod tests {
         groups: &[DateGroup],
         ids: &[String],
         day: NaiveDate,
-        fallback: NaiveTime,
+        fallback: Option<NaiveTime>,
         claimed: &[String],
         task_id: &str,
     ) -> Vec<(NaiveDateTime, NaiveTime)> {
@@ -1875,7 +1877,7 @@ mod tests {
     fn test_matchday_shared_group_full_day_simulation() {
         let groups = vec![matchday_group()];
         let ids = vec!["g_matchday".into()];
-        let fallback = NaiveTime::from_hms_opt(9, 0, 0).unwrap(); // 任务自身的“特例时刻” 09:00:00
+        let fallback = Some(NaiveTime::from_hms_opt(9, 0, 0).unwrap()); // 任务自身的“特例时刻” 09:00:00
         let oct_24 = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
         let sep_06 = NaiveDate::from_ymd_opt(2026, 9, 6).unwrap();
         let off_day = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
@@ -1917,7 +1919,7 @@ mod tests {
         let groups = vec![matchday_group()];
         let ids = vec!["g_matchday".into()];
         let day = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
-        let fallback = NaiveTime::from_hms_opt(9, 0, 0).unwrap();
+        let fallback = Some(NaiveTime::from_hms_opt(9, 0, 0).unwrap());
         let claimed = vec!["2026-10-24 09:30:00".to_string()];
         let history: Vec<String> = Vec::new();
 
@@ -1938,6 +1940,50 @@ mod tests {
         assert!(!seen.is_empty());
         assert!(due_date_group_triggers(day.and_hms_opt(9, 30, 30).unwrap(), &groups, &ids, fallback, &claimed, &seen, "t1").is_empty());
         assert_eq!(due_date_group_triggers(on_time, &groups, &ids, fallback, &claimed, &seen, "t2").len(), 1);
+    }
+
+    #[test]
+    fn test_entries_without_time_need_an_explicit_fallback() {
+        let groups = vec![DateGroup {
+            id: "g".into(),
+            name: "封板期".into(),
+            description: None,
+            dates: vec![
+                "2026-10-24".into(),                // 纯日期条目
+                "2026/10/25 ~ 2026/10/26".into(),   // 日期区间条目
+                "2026-10-24 14:20:00".into(),       // 自带时刻条目
+            ],
+            created_at: "".into(),
+        }];
+        let ids = vec!["g".into()];
+        let all: Vec<String> = vec![
+            "2026-10-24".into(),
+            "2026/10/25 ~ 2026/10/26".into(),
+            "2026-10-24 14:20:00".into(),
+        ];
+        let d24 = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
+        let d25 = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+
+        // 没给回退时刻：只有自带时刻的条目产生触发点，纯日期与区间条目当天不触发（不再默认 09:00）
+        assert_eq!(
+            get_force_trigger_times(d24, &groups, &ids, None, &all),
+            vec![NaiveTime::from_hms_opt(14, 20, 0).unwrap()]
+        );
+        assert!(get_force_trigger_times(d25, &groups, &ids, None, &all).is_empty());
+
+        // 给了回退时刻：无时刻的条目按回退时刻补上
+        let fb = Some(NaiveTime::from_hms_opt(21, 30, 0).unwrap());
+        assert_eq!(
+            get_force_trigger_times(d24, &groups, &ids, fb, &all),
+            vec![
+                NaiveTime::from_hms_opt(14, 20, 0).unwrap(),
+                NaiveTime::from_hms_opt(21, 30, 0).unwrap(),
+            ]
+        );
+        assert_eq!(
+            get_force_trigger_times(d25, &groups, &ids, fb, &all),
+            vec![NaiveTime::from_hms_opt(21, 30, 0).unwrap()]
+        );
     }
 
     #[test]

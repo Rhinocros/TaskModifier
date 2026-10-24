@@ -155,6 +155,13 @@ export const dictionary = {
   "每个任务只在自己勾选的那条日期+时刻触发，不到点不执行；一条都不勾则该任务当天没有任何触发点。": "Each task triggers only at the entries it ticks, never before the moment; tick none and the task has no trigger point that day.",
   "可设置日期、具体时刻或日期区间，供多个任务共享读取引用；任务在规则里逐条认领自己负责的时刻": "Set dates, exact times or ranges shared by multiple tasks; each task claims the entries it is responsible for",
   "按住上下拖动调整日志区高度": "Drag up or down to resize the log area",
+  "任务执行时刻 (HH:mm:ss)": "Task Time (HH:mm:ss)",
+  "回退时刻 (仅用于未写时刻的认领条目)": "Fallback Time (only for claimed entries without a time)",
+  "循环模式下，任务线程到达此精确时刻触发执行": "In recurrence modes the task fires exactly at this moment",
+  "认领的条目里有纯日期或日期区间（没写时刻）时才需要；留空则那些条目当天不触发。": "Only needed when a claimed entry is a bare date or a range without a time; leave it empty and those entries will not trigger that day.",
+  "循环模式需要填写任务执行时刻，请把上方“任务执行时刻”补齐后再保存。": "A recurrence mode needs a task time; please fill in the Task Time field above before saving.",
+  "特例生效触发需要至少勾选一条“认领的日期时间条目”，否则该任务当天不会有任何触发点。": "Force trigger needs at least one claimed date/time entry, otherwise this task has no trigger point that day.",
+  "回退时刻: ": "Fallback time: ",
   "(0个组)": "(0 groups)",
   "个组)": " groups)",
   
