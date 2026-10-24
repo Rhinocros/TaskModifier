@@ -1019,7 +1019,7 @@ input[type="datetime-local"]::-webkit-calendar-picker-indicator {
   top: 0; left: 0; right: 0; bottom: 0;
   background-color: #3f3f46;
   transition: .2s;
-  border-radius: 4px;
+  border-radius: 20px;
 }
 
 .slider:before {
